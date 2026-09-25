@@ -417,8 +417,10 @@
     code = String(code).trim();
     if(!code || !store) return;
     var now = Date.now();
-    if(code === lastCode && now - lastAt < 2500 && !ocrPreload) return;   // one tag, one count
-    lastCode = code; lastAt = now;
+    var repeated = code === lastCode && now - lastAt < 2500;
+    if(repeated && !ocrPreload) return;   // one tag, one count; still accept its OCR details
+    if(!repeated){ lastCode = code; saveScan(code, format, ocrPreload ? ocrPreload.brand : null); }
+    lastAt = now;
     // keep the barcode's box: it anchors the OCR crop and the parser
     if(box && current && current.code === code) current.box = box;
     pendingBox = box || null;
@@ -427,13 +429,21 @@
     if(!quiet){ hit(); beep(!!item); }
 
     freshCode = code;
-    saveScan(code, format, ocrPreload ? ocrPreload.brand : null);
     if(ocrPreload && ocrPreload.brand && !current) current = { code: code, brand: ocrPreload.brand };
     else if(ocrPreload && ocrPreload.brand && current) current.brand = ocrPreload.brand;
 
     renderTicket(code, format, item ? "just scanned" : "just scanned — not in the catalog");
 
     if(ocrPreload){
+      lastResult = {
+        barcode: code,
+        productCode: ocrPreload.sku || null,
+        productName: ocrPreload.name || null,
+        price: ocrPreload.price != null ? ocrPreload.price : null,
+        brand: ocrPreload.brand || null,
+        confidence: ocrPreload.confidence
+      };
+      showConfidence(ocrPreload.confidence);
       markPrefilled("newBrand", ocrPreload.brand);
       markPrefilled("newName",  ocrPreload.name);
       markPrefilled("newSku",   ocrPreload.sku);
@@ -680,7 +690,7 @@
     torchOn = !!on;
     btnTorch.setAttribute("aria-pressed", torchOn ? "true" : "false");
     var label = $("torchLabel");
-    if(label) label.textContent = torchOn ? "Flash on" : "Flash";
+    if(label) label.textContent = torchOn ? "Allumée" : "Lampe";
   }
 
   function setTorch(on){
@@ -733,12 +743,33 @@
 
     FastDecoder.decodeImage(c, null).then(function(barHit){
       var barCode = barHit ? barHit.text : null;
-      return TagOCR.read(c, barCode, function(stage, pct){
+      // Focus OCR on the detected tag instead of the full camera view.
+      var label = barHit && decoder ? decoder.capture(1800, barHit.box) : c;
+      if(!label) label = c;
+      return TagOCR.readLines(label, function(stage, pct){
         var p = pct ? " " + Math.round(pct * 100) + "%" : "";
         say("<b>⚡ Smart reading:</b> " + String(stage).replace(/_/g, " ") + p);
-      }).then(function(ocrRes){
+      }).then(function(ocr){
+        var barcodeBox = null;
+        if(barHit && barHit.box && label.__region){
+          var region = label.__region, b = barHit.box;
+          barcodeBox = { x:(b.x-region.x)/region.w, y:(b.y-region.y)/region.h,
+            w:b.w/region.w, h:b.h/region.h };
+        } else if(barHit) barcodeBox = barHit.box;
+        var structured = LabelParser.parse({ barcode:barCode, barcodeBox:barcodeBox, lines:ocr.lines });
+        var legacy = TagOCR.parse(ocr.text, barCode);
+        var ocrRes = {
+          brand:structured.brand || legacy.brand,
+          sku:structured.productCode || legacy.sku,
+          name:structured.productName || legacy.name,
+          price:structured.price != null ? structured.price : legacy.price,
+          digits:legacy.digits,
+          confidence:structured.confidence
+        };
         if(smartBtn) smartBtn.disabled = false;
-        var code = barCode || (ocrRes && ocrRes.digits) || null;
+        var ocrCode = ocrRes && ocrRes.digits;
+        var ocrFormat = ocrCode ? PDZ.guessFormat(ocrCode) : "";
+        var code = barCode || (ocrCode && PDZ.checksumState(ocrCode, ocrFormat) === true ? ocrCode : null);
         var fmt = (barHit && barHit.format) || (code ? PDZ.guessFormat(code) : "");
         if(code){
           accept(code, fmt, (barHit && barHit.box) || null, false, ocrRes);
@@ -789,7 +820,7 @@
         }
       } else if(global_TagOCR()){
         TagOCR.read(img, null).then(function(ocrRes){
-          if(ocrRes && ocrRes.digits){
+          if(ocrRes && ocrRes.digits && PDZ.checksumState(ocrRes.digits, PDZ.guessFormat(ocrRes.digits)) === true){
             accept(ocrRes.digits, PDZ.guessFormat(ocrRes.digits), null, false, ocrRes);
           } else {
             say("<b>No barcode found in that photo.</b> Fill more of the frame with the tag, keep the bars straight, and avoid glare.", true);
