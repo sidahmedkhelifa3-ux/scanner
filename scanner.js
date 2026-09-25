@@ -742,6 +742,11 @@
     if(smartBtn) smartBtn.disabled = true;
 
     FastDecoder.decodeImage(c, null).then(function(barHit){
+      if(!barHit){
+        if(smartBtn) smartBtn.disabled = false;
+        say("<b>Barcode not confirmed.</b> No item was recorded. Hold the bars uncovered, steady and in focus, then try again.", true);
+        return null;
+      }
       var barCode = barHit ? barHit.text : null;
       // Focus OCR on the detected tag instead of the full camera view.
       var label = barHit && decoder ? decoder.capture(1800, barHit.box) : c;
@@ -767,14 +772,14 @@
           confidence:structured.confidence
         };
         if(smartBtn) smartBtn.disabled = false;
-        var ocrCode = ocrRes && ocrRes.digits;
-        var ocrFormat = ocrCode ? PDZ.guessFormat(ocrCode) : "";
-        var code = barCode || (ocrCode && PDZ.checksumState(ocrCode, ocrFormat) === true ? ocrCode : null);
+        // OCR may read references and prices as digits; only the barcode
+        // decoder is allowed to supply the product's barcode value.
+        var code = barCode;
         var fmt = (barHit && barHit.format) || (code ? PDZ.guessFormat(code) : "");
         if(code){
           accept(code, fmt, (barHit && barHit.box) || null, false, ocrRes);
         } else {
-          say("<b>No tag recognized.</b> Move camera closer to the barcode & label.", true);
+          say("<b>Barcode not confirmed.</b> No item was recorded. Move closer and keep the bars uncovered and in focus.", true);
         }
       });
     }).catch(function(err){
@@ -818,18 +823,8 @@
         } else {
           accept(hit.text, hit.format, hit.box || null);
         }
-      } else if(global_TagOCR()){
-        TagOCR.read(img, null).then(function(ocrRes){
-          if(ocrRes && ocrRes.digits && PDZ.checksumState(ocrRes.digits, PDZ.guessFormat(ocrRes.digits)) === true){
-            accept(ocrRes.digits, PDZ.guessFormat(ocrRes.digits), null, false, ocrRes);
-          } else {
-            say("<b>No barcode found in that photo.</b> Fill more of the frame with the tag, keep the bars straight, and avoid glare.", true);
-          }
-        }).catch(function(){
-          say("<b>No barcode found in that photo.</b> Fill more of the frame with the tag, keep the bars straight, and avoid glare.", true);
-        });
       } else {
-        say("<b>No barcode found in that photo.</b> Fill more of the frame with the tag, keep the bars straight, and avoid glare.", true);
+        say("<b>Barcode not confirmed.</b> No item was recorded. Move closer, keep the bars uncovered and in focus, then try again.", true);
       }
     }).catch(function(err){
       say("<b>Photo decoding failed</b> — " + esc(errText(err)) + ". Use <em>Type code</em>.", true);
@@ -845,8 +840,13 @@
   function manualGo(){
     var v = $("manualCode").value.replace(/\D/g,"");
     if(v.length < 6){ say("<b>Too short.</b> Type every digit printed under the bars.", true); return; }
+    var manualFormat = PDZ.guessFormat(v);
+    if(manualFormat && PDZ.checksumState(v, manualFormat) === false){
+      say("<b>Check digit does not match.</b> Recheck the number under the bars before adding it.", true);
+      return;
+    }
     lastCode = "";
-    accept(v, PDZ.guessFormat(v), null, true);
+    accept(v, manualFormat, null, true);
     $("manualCode").value = "";
   }
   $("manualGo").addEventListener("click", manualGo);

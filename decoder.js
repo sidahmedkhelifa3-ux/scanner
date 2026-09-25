@@ -613,18 +613,17 @@
   }
 
   /* How many identical reads a symbology needs before it is believed.
-     EAN/UPC carry a check digit, so one verified read is proof. The
+     EAN/UPC check digits reject many misreads; three matching video
+     reads provide an additional stability check. Other formats lack
+     a reliable retail check digit, so they also need repeated reads. The
      others carry none (or a weak one) and WILL decode noise — fabric
      weave, text edges, half of a neighbouring barcode — into a
      plausible number, so they have to be seen repeatedly and
      identically before they count. ITF is the worst offender: any
      run of alternating bars can satisfy it. */
   var CONFIRMATIONS = {
-    EAN_13: 1, EAN_8: 1, UPC_A: 1, UPC_E: 1,
-    CODE_128: 2,        // has an internal checksum
-    CODE_39: 2,
-    CODABAR: 3,
-    ITF: 3              // no check digit, decodes noise readily
+    EAN_13: 3, EAN_8: 3, UPC_A: 3, UPC_E: 3,
+    CODE_128: 3, CODE_39: 3, CODABAR: 3, ITF: 3
   };
   var CONFIRM_WINDOW = 2200;   // ms: corroborating reads must be close together
 
@@ -657,8 +656,9 @@
       return false;
     }
 
-    // Verified check digit: proof in one read.
-    if(chk === true){ this.pending = null; return true; }
+    // A valid check digit is necessary, and repeated video frames provide
+    // an additional stability check before the scan is accepted.
+    if(chk === true && (CONFIRMATIONS[f] || 2) <= 1){ this.pending = null; return true; }
 
     // No check digit available for this symbology.
     if(!plausible(hit.text, f)){
@@ -866,6 +866,7 @@
       return Promise.resolve(null);
     }
 
+    var candidate = null, confirmations = 0;
     function attempt(i){
       if(i >= STILL_PASSES.length) return Promise.resolve(null);
       if(onProgress) onProgress(i + 1, STILL_PASSES.length);
@@ -883,7 +884,16 @@
           resolve(hit);
         }, 0);
       }).then(function(hit){
-        return hit || attempt(i + 1);
+        if(hit){
+          if(checkDigitOk(hit.text, hit.format) === false){
+            candidate = null; confirmations = 0;
+          } else {
+            if(candidate && candidate.text === hit.text && candidate.format === hit.format) confirmations++;
+            else { candidate = hit; confirmations = 1; }
+            if(confirmations >= 2) return candidate;
+          }
+        }
+        return attempt(i + 1);
       });
     }
     return attempt(0);
@@ -892,15 +902,19 @@
   global.FastDecoder = {
     create: function(video, opts){ return new FastDecoder(video, opts); },
     decodeImage: function(source, onProgress){
-      if(global.BarcodeDetector){
-        return new global.BarcodeDetector().detect(source).then(function(res){
-          if(res && res.length){
-            return { text: res[0].rawValue, format: (res[0].format || "").toUpperCase() };
-          }
-          return zxingStill(source, onProgress);
-        }).catch(function(){ return zxingStill(source, onProgress); });
-      }
-      return zxingStill(source, onProgress);
+      if(!global.BarcodeDetector) return zxingStill(source, onProgress);
+      return new global.BarcodeDetector().detect(source).then(function(res){
+        var nativeHit = res && res.length
+          ? { text:res[0].rawValue, format:(res[0].format || "").toUpperCase() }
+          : null;
+        return zxingStill(source, onProgress).then(function(verified){
+          if(!nativeHit) return verified;
+          // Still images need agreement between browser-native and ZXing
+          // decoding as well as repeated ZXing reads from different crops.
+          return verified && verified.text === nativeHit.text &&
+            verified.format === nativeHit.format ? verified : null;
+        });
+      }).catch(function(){ return zxingStill(source, onProgress); });
     }
   };
 
