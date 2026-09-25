@@ -103,6 +103,7 @@
     this.lastHintAt = 0; this.lastHint = ""; this.torchAuto = false;
     this.zoom = null; this.zoomCaps = null;
     this.native = null; this.zxing = null; this.pending = null;
+    this._probe = null; this._probeCtx = null; this._aim = null;
   }
 
   /* ---------- decoder back ends ---------- */
@@ -309,6 +310,10 @@
     return this.zoomCaps;
   };
 
+  /* Where the barcode was last seen, in 0..1 frame coordinates, so a tap
+     near the bars can snap exactly onto them. */
+  FastDecoder.prototype.lastBox = function(){ return this._lastBox || null; };
+
   FastDecoder.prototype.zoomRange = function(){ return this.zoomCaps; };
   FastDecoder.prototype.getZoom   = function(){ return this.zoom; };
 
@@ -420,11 +425,19 @@
      the background. Naming a point of interest and running a
      single-shot cycle there is what the camera app does when you tap.
      `point` is {x, y} in 0..1 of the frame; defaults to the centre. */
-  FastDecoder.prototype.refocus = function(point){
+  FastDecoder.prototype.refocus = function(point, opts){
     var t = this.track;
     if(!t || !t.applyConstraints) return;
     var p = point || { x: 0.5, y: 0.5 };
+    var hold = (opts && opts.hold) || 600;
     this._refocusAt = performance.now();
+    // A deliberate tap owns the focus for a while: nothing automatic may
+    // drag the lens off what the user just pointed at.
+    if(opts && opts.manual){
+      this._manualUntil = this._refocusAt + (opts.lock || 4000);
+      this._aim = { x: p.x, y: p.y };
+      this._aimAt_ = this._refocusAt;
+    }
     try{
       var caps = t.getCapabilities ? t.getCapabilities() : {};
       var modes = caps.focusMode || [];
@@ -452,7 +465,7 @@
             var back = { focusMode: "continuous" };
             for(var k2 in aim) back[k2] = aim[k2];
             t.applyConstraints({ advanced: [back] }).catch(function(){});
-          }, 600);
+          }, hold);
         }).catch(function(){});
         return;
       }
@@ -465,17 +478,83 @@
     }catch(e){}
   };
 
-  /* The picture is flat — either out of focus or there is nothing to
-     read. Re-aim autofocus at the centre rather than waiting for the
-     camera to notice, but no more than once every REFOCUS_GAP so the
-     lens is not driven back and forth. */
+  /* ---------- find the print ----------
+     Focusing on the middle of the frame is a guess. Printed digits and
+     bars are the highest-contrast thing on a tag, so measuring where
+     the edges actually are finds the numbers wherever they sit. The
+     probe is a 240x180 copy of the whole frame split into a 3x3 grid;
+     the cell with the most edge energy is where the print is. */
+  var PROBE_W = 240, PROBE_H = 180, GRID = 3;
+
+  FastDecoder.prototype._busiestSpot = function(){
+    var v = this.video;
+    if(!v || !v.videoWidth) return null;
+    if(!this._probe){
+      this._probe = document.createElement("canvas");
+      this._probe.width = PROBE_W;
+      this._probe.height = PROBE_H;
+      this._probeCtx = this._probe.getContext("2d", { willReadFrequently: true });
+    }
+    var c = this._probe, ctx = this._probeCtx, img;
+    ctx.drawImage(v, 0, 0, c.width, c.height);
+    try{ img = ctx.getImageData(0, 0, c.width, c.height); }
+    catch(e){ return null; }
+
+    var d = img.data, W = c.width, H = c.height;
+    var best = -1, bx = 0.5, by = 0.5;
+
+    for(var gy = 0; gy < GRID; gy++){
+      for(var gx = 0; gx < GRID; gx++){
+        var x0 = Math.floor(gx * W / GRID), x1 = Math.floor((gx + 1) * W / GRID);
+        var y0 = Math.floor(gy * H / GRID), y1 = Math.floor((gy + 1) * H / GRID);
+        var sum = 0, n = 0;
+        for(var y = y0; y < y1; y += 2){          // every other row is plenty
+          var prev = -1;
+          for(var x = x0; x < x1; x++){
+            var i = (y * W + x) * 4;
+            var lum = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
+            if(prev >= 0){ sum += Math.abs(lum - prev); n++; }
+            prev = lum;
+          }
+        }
+        var e = n ? sum / n : 0;
+        if(e > best){ best = e; bx = (gx + 0.5) / GRID; by = (gy + 0.5) / GRID; }
+      }
+    }
+    return best > 0 ? { x: bx, y: by, edge: best } : null;
+  };
+
+  /* Point the camera at something, but only when it is worth the call:
+     a lens driven every frame never settles. */
+  FastDecoder.prototype._aimAt = function(point, force){
+    if(!point) return;
+    var now = performance.now();
+    if(now < (this._manualUntil || 0)) return;     // the user's tap wins
+    var last = this._aim;
+    if(!force && last &&
+       Math.abs(last.x - point.x) < 0.12 && Math.abs(last.y - point.y) < 0.12 &&
+       now - (this._aimAt_ || 0) < 3000) return;
+    this._aim = { x: point.x, y: point.y };
+    this._aimAt_ = now;
+    this.refocus(point);
+  };
+
+  /* The picture is flat — out of focus, or aimed at nothing. Find where
+     the print is and focus THERE, rather than assuming the centre. No
+     more than once every REFOCUS_GAP so the lens is not driven back and
+     forth. */
   FastDecoder.prototype._maybeRefocus = function(){
     var now = performance.now();
+    if(now < (this._manualUntil || 0)) return;        // the user's tap wins
     if(now - this.startedAt < 700) return;            // let the first AF settle
     if(now - this.lastHitAt < 1200) return;           // it is working, leave it
     if(now - (this._refocusAt || 0) < REFOCUS_GAP) return;
-    this.refocus({ x: 0.5, y: 0.5 });
-    if(this.onHint) this.onHint("Refocusing on the tag…");
+
+    var spot = this._busiestSpot();
+    this.refocus(spot || { x: 0.5, y: 0.5 });
+    if(this.onHint){
+      this.onHint(spot ? "Focusing on the printed code…" : "Refocusing…");
+    }
   };
 
   /* ---------- accepting a result ---------- */
@@ -621,6 +700,13 @@
       if(hit && hit.text){
         self.lastHitAt = performance.now();
         self.lastHint = "";
+        // Now we know exactly where the printed code is: keep focus on it
+        // so the next read of the same tag is already sharp.
+        if(hit.box && !hit.box.approx){
+          self._lastBox = hit.box;
+          self._aimAt({ x: hit.box.x + hit.box.w / 2,
+                        y: hit.box.y + hit.box.h / 2 });
+        }
         // the box is the spatial anchor OCR crops around
         if(self._confirm(hit) && self.onHit) self.onHit(hit.text, hit.format, hit.box);
       } else if(!self.widened && performance.now() - self.startedAt > WIDEN_MS &&
@@ -647,6 +733,13 @@
 
     this._readZoomCaps();
     if(this.zoomCaps && this.onZoom) this.onZoom(this.zoom, this.zoomCaps);
+
+    // Once the first frames exist, aim autofocus at wherever the print
+    // actually is rather than at the middle of the picture.
+    setTimeout(function(){
+      if(!self.running) return;
+      self._aimAt(self._busiestSpot(), true);
+    }, 800);
 
     return this._setupNative().then(function(native){
       if(!native) self._setupZxing();

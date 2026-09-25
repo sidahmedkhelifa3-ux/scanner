@@ -132,6 +132,11 @@ header.bar{
   25%{transform:scale(1);opacity:1}
   100%{transform:scale(.92);opacity:0}
 }
+/* the tap landed on the bars and snapped to their centre */
+.focusRing.onBars{
+  border-color:var(--ok);
+  box-shadow:0 0 0 1px rgba(0,0,0,.35), 0 0 14px color-mix(in srgb,var(--ok) 70%,transparent);
+}
 @media (prefers-reduced-motion: reduce){
   .focusRing{animation:none;opacity:.9}
 }
@@ -342,26 +347,6 @@ textarea{
 }
 footer{font-family:var(--mono);font-size:10.5px;color:var(--muted);text-align:center;line-height:1.7}
 
-/* --- the link between the two pages ----------------------- */
-.bigLink{
-  display:flex;align-items:center;gap:14px;
-  border:1px solid var(--rule);border-radius:12px;background:var(--card);
-  padding:14px 16px;text-decoration:none;color:inherit;box-shadow:var(--shadow);
-}
-.bigLink:hover{border-color:var(--muted)}
-.bigLink:focus-visible{outline:2px solid var(--laser);outline-offset:2px}
-.bigLink-main{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
-.bigLink-main b{font-size:15px;font-weight:600;letter-spacing:-.01em}
-.bigLink-main em{
-  font-style:normal;font-size:12px;color:var(--muted);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-}
-.bigLink-go{
-  font-size:20px;color:var(--muted);flex:none;
-  width:34px;height:34px;border-radius:50%;border:1px solid var(--rule);
-  display:grid;place-items:center;
-}
-.bigLink:hover .bigLink-go{color:var(--ink);border-color:var(--muted)}
 .empty a{color:var(--ink)}
 
 /* --- the printable sheet ---------------------------------- */

@@ -86,11 +86,6 @@
 
   function renderRecent(){
     var s = PDZ.summarise(scans, catalog);
-    $("linkCount").textContent = s.pieces + (s.pieces === 1 ? " piece" : " pieces") +
-      (s.products ? " · " + s.products + (s.products === 1 ? " product" : " products") : "");
-    $("linkSub").textContent = s.priced && s.total
-      ? money(s.total) + " DA on the list — open it to print or export"
-      : "open the list, totals and printing";
 
     if(!s.rows.length){
       recentEl.innerHTML = '<div class="empty">Nothing yet. Scan a tag and it appears here.</div>';
@@ -608,32 +603,44 @@
     decoder.setZoom(zoomFor(b.getAttribute("data-zoom"), caps));
   });
 
-  /* Tap the picture to force a refocus — the usual reason a close tag
-     will not read is that the lens has settled on the background. */
-  /* Tap to focus, on the spot you tapped — like the phone's camera app. */
+  /* Where in the PICTURE did they tap? The video is object-fit:contain
+     inside its box, so the image may be letterboxed — mapping from the
+     container rect would aim the camera at the wrong place. Map through
+     the drawn image instead. */
+  function pointInVideo(ev){
+    try{
+      if(typeof ev.clientX !== "number" || !video.getBoundingClientRect) return null;
+      return PDZ.pointInImage(video.getBoundingClientRect(),
+                              video.videoWidth, video.videoHeight,
+                              ev.clientX, ev.clientY);
+    }catch(e){ return null; }
+  }
+
+  /* Tap on the barcode and the camera focuses there straight away. If the
+     tap lands on or near where the bars were last seen, snap to the exact
+     centre of them — that is what "click on the code bar" should mean. */
   scope.addEventListener("click", function(ev){
     if(!decoder || !running) return;
     if(ev.target.closest && ev.target.closest(".zoomBar")) return;
 
-    var point = null;
-    try{
-      var r = scope.getBoundingClientRect();
-      if(r && r.width && r.height && typeof ev.clientX === "number"){
-        point = { x: (ev.clientX - r.left) / r.width,
-                  y: (ev.clientY - r.top) / r.height };
-      }
-    }catch(e){}
+    var point = pointInVideo(ev);
+    if(!point) return;
 
-    decoder.refocus(point);
-    showFocusRing(point);
-    say("<b>Focusing…</b>");
+    var box = decoder.lastBox && decoder.lastBox();
+    point = PDZ.snapToBox(point, box);
+    var onBars = !!point.snapped;
+
+    // manual: hold focus there and keep the automatic aiming off it
+    decoder.refocus(point, { manual: true, hold: 2500, lock: 4000 });
+    showFocusRing(point, onBars);
+    say(onBars ? "<b>Focusing on the barcode…</b>" : "<b>Focusing there…</b>");
   });
 
   /* A brief ring where you tapped, so the tap visibly did something. */
-  function showFocusRing(point){
+  function showFocusRing(point, onBars){
     if(!point) return;
     var ring = document.createElement("div");
-    ring.className = "focusRing";
+    ring.className = onBars ? "focusRing onBars" : "focusRing";
     ring.style.left = (point.x * 100) + "%";
     ring.style.top  = (point.y * 100) + "%";
     scope.appendChild(ring);
@@ -792,12 +799,6 @@
   $("manualCode").addEventListener("keydown", function(e){ if(e.key === "Enter") manualGo(); });
 
   /* ================= start ================= */
-  /* The database lives at its own address once the two are split. */
-  (function linkToDatabase(){
-    var a = document.querySelector("a.bigLink");
-    if(a) a.setAttribute("href", PDZ.appUrl("database"));
-  })();
-
   renderRecent();
   window.addEventListener("pagehide", stopCamera);
 

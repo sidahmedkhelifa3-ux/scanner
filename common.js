@@ -188,8 +188,38 @@
               (cfg.databaseUrl && cfg.databaseUrl.trim()));
   }
 
+  /* Map a tap onto the picture. The video is object-fit:contain inside
+     its box, so when the stream's shape differs from the box there are
+     letterbox bars — mapping from the box rect would aim the camera at
+     the wrong part of the scene. Returns 0..1 image coordinates, or
+     null when the tap landed on a bar rather than the picture. */
+  function pointInImage(rect, vw, vh, clientX, clientY){
+    if(!rect || !rect.width || !rect.height || !vw || !vh) return null;
+    var scale = Math.min(rect.width / vw, rect.height / vh);
+    var dw = vw * scale, dh = vh * scale;
+    var ox = rect.left + (rect.width  - dw) / 2;
+    var oy = rect.top  + (rect.height - dh) / 2;
+    var x = (clientX - ox) / dw;
+    var y = (clientY - oy) / dh;
+    if(x < 0 || x > 1 || y < 0 || y > 1) return null;
+    return { x: x, y: y };
+  }
+
+  /* Tapping anywhere on the barcode should mean "focus on the barcode",
+     so a tap inside (or just outside) its box snaps to the box centre. */
+  function snapToBox(point, box, pad){
+    if(!point || !box || !box.w || !box.h) return point;
+    var p = (pad == null) ? 0.06 : pad;
+    if(point.x >= box.x - p && point.x <= box.x + box.w + p &&
+       point.y >= box.y - p && point.y <= box.y + box.h + p){
+      return { x: box.x + box.w / 2, y: box.y + box.h / 2, snapped: true };
+    }
+    return point;
+  }
+
   global.PDZ = {
     appUrl: appUrl, isSplit: isSplit,
+    pointInImage: pointInImage, snapToBox: snapToBox,
     esc: esc, money: money, clock: clock, stamp: stamp,
     guessFormat: guessFormat, checksumState: checksumState,
     drawBars: drawBars, groupScans: groupScans, unitPrice: unitPrice,
