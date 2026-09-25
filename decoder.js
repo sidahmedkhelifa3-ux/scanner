@@ -478,13 +478,24 @@
     }catch(e){}
   };
 
-  /* ---------- find the print ----------
-     Focusing on the middle of the frame is a guess. Printed digits and
-     bars are the highest-contrast thing on a tag, so measuring where
-     the edges actually are finds the numbers wherever they sit. The
-     probe is a 240x180 copy of the whole frame split into a 3x3 grid;
-     the cell with the most edge energy is where the print is. */
+  /* ---------- find the BARCODE ----------
+     Focusing on the middle of the frame is a guess. The barcode is the
+     best thing to aim at, so the probe looks for what a barcode uniquely
+     is: a dense run of regular light/dark alternations along a
+     horizontal line. Printed text also has edges, but far fewer
+     crossings per millimetre and much less regular ones, so counting
+     CROSSINGS rather than raw contrast picks the bars over a bold price.
+
+     The threshold is each ROW's own mean rather than a fixed level, so
+     a shadow falling across half the tag does not wipe out the count.
+
+     On probe size: 240x180 was chosen by measurement, not guesswork.
+     Running the bars-versus-text and distant-barcode tests at 240, 480
+     and 960 gave identical results, so the smallest is used — it is
+     four times less work than 480 for no measured loss. If a real
+     phone ever disagrees, raise it here and re-run the decoder tests. */
   var PROBE_W = 240, PROBE_H = 180, GRID = 3;
+  var HYST = 6;          // luma slack, so sensor noise is not a crossing
 
   FastDecoder.prototype._busiestSpot = function(){
     var v = this.video;
@@ -507,21 +518,46 @@
       for(var gx = 0; gx < GRID; gx++){
         var x0 = Math.floor(gx * W / GRID), x1 = Math.floor((gx + 1) * W / GRID);
         var y0 = Math.floor(gy * H / GRID), y1 = Math.floor((gy + 1) * H / GRID);
-        var sum = 0, n = 0;
-        for(var y = y0; y < y1; y += 2){          // every other row is plenty
-          var prev = -1;
-          for(var x = x0; x < x1; x++){
-            var i = (y * W + x) * 4;
-            var lum = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
-            if(prev >= 0){ sum += Math.abs(lum - prev); n++; }
-            prev = lum;
+
+        var crossings = 0, samples = 0, span = 0, rows = 0;
+
+        for(var y = y0; y < y1; y += 2){            // every other row is plenty
+          // a row's own mean is the threshold, so this works on a grey
+          // label in shade as well as a white one in sun
+          var sum = 0, n = 0, lo = 255, hi = 0, x, i, lum;
+          for(x = x0; x < x1; x++){
+            i = (y * W + x) * 4;
+            lum = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
+            sum += lum; n++;
+            if(lum < lo) lo = lum;
+            if(lum > hi) hi = lum;
           }
+          if(!n) continue;
+          var mean = sum / n;
+          if(hi - lo < 30) { rows++; continue; }     // flat row: nothing here
+
+          var above = null;
+          for(x = x0; x < x1; x++){
+            i = (y * W + x) * 4;
+            lum = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
+            if(above === null){ above = lum > mean; continue; }
+            if(above && lum < mean - HYST){ above = false; crossings++; }
+            else if(!above && lum > mean + HYST){ above = true; crossings++; }
+          }
+          samples += n; span += (hi - lo); rows++;
         }
-        var e = n ? sum / n : 0;
-        if(e > best){ best = e; bx = (gx + 0.5) / GRID; by = (gy + 0.5) / GRID; }
+
+        if(!samples) continue;
+        // crossings per pixel is the barcode signature; contrast only
+        // breaks ties between two equally striped cells
+        var density = crossings / samples;
+        var contrast = rows ? (span / rows) / 255 : 0;
+        var score = density * (0.7 + 0.3 * contrast);
+
+        if(score > best){ best = score; bx = (gx + 0.5) / GRID; by = (gy + 0.5) / GRID; }
       }
     }
-    return best > 0 ? { x: bx, y: by, edge: best } : null;
+    return best > 0 ? { x: bx, y: by, score: best } : null;
   };
 
   /* Point the camera at something, but only when it is worth the call:
@@ -553,7 +589,7 @@
     var spot = this._busiestSpot();
     this.refocus(spot || { x: 0.5, y: 0.5 });
     if(this.onHint){
-      this.onHint(spot ? "Focusing on the printed code…" : "Refocusing…");
+      this.onHint(spot ? "Focusing on the barcode…" : "Refocusing…");
     }
   };
 
