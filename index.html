@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Scan Pyjama Dz clothing tags into the shared list.">
+<meta name="theme-color" content="#F2EDE1">
+<title>Pyjama Dz Scanner</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏷️</text></svg>">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+Arabic:wght@400;600&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="wrap">
+  <header class="bar">
+    <div class="mark">Pyjama&nbsp;Dz <small>scanner</small></div>
+    <div class="spacer"></div>
+    <span class="sync" id="sync" data-s="wait"><i></i><span id="syncLabel">starting</span></span>
+  </header>
+
+  <div class="scope" id="scope" data-state="idle">
+    <video id="video" playsinline muted autoplay hidden></video>
+    <div class="idle" id="idle">
+      <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+        <path d="M3 8V5a2 2 0 0 1 2-2h3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M21 16v3a2 2 0 0 1-2 2h-3"/>
+        <path d="M7 8v8M10 8v8M13 8v8M17 8v8" stroke-width="1.6"/>
+      </svg>
+      <p>Point it at the tag. It sweeps the whole picture at several zooms, so the barcode does not have to be centred or upright. Tap the picture to refocus.</p>
+    </div>
+        <!-- Intelligent Camera Live HUD Overlay -->
+    <div class="smart-hud" id="smartHud" hidden>
+      <div class="smart-hud-title">
+        <span class="smart-hud-dot"></span>
+        <span>Caméra Intelligente</span>
+      </div>
+      <div class="smart-hud-chips">
+        <span class="hud-chip" id="hudBarcode"><b>Code:</b> <i id="hudValCode">—</i></span>
+        <span class="hud-chip" id="hudBrand"><b>Marque:</b> <i id="hudValBrand">—</i></span>
+        <span class="hud-chip" id="hudRef"><b>Réf:</b> <i id="hudValRef">—</i></span>
+        <span class="hud-chip" id="hudPrice"><b>Prix:</b> <i id="hudValPrice">—</i></span>
+      </div>
+    </div>
+    <div class="reticle"><span></span><span></span><span></span><span></span></div>
+    <div class="laser"></div>
+    <div class="flash" id="flash"></div>
+    <div class="zoomBar" id="zoomBar" hidden>
+      <button data-zoom="1">1×</button>
+      <button data-zoom="2">2×</button>
+      <button data-zoom="3">3×</button>
+      <button data-zoom="max">max</button>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="primary grow" id="btnStart">Start camera</button>
+    <button class="smart-btn" id="btnSmartScan" title="Scan intelligent (Code-barres + Marque + Référence)">⚡ Scan intelligent</button>
+    
+    <button id="btnTorch" hidden>Torch</button>
+    <label class="file" id="lblPhoto"><button class="ghost" tabindex="-1" aria-hidden="true">Scan a photo</button>
+      <input type="file" id="filePhoto" accept="image/*" capture="environment" aria-label="Scan a barcode from a photo">
+    </label>
+    <button class="ghost" id="btnManual">Type code</button>
+  </div>
+
+  <p class="status" id="status"><b>Ready.</b> Camera scanning needs a moment of permission the first time.</p>
+
+  <div class="panel" id="manualPanel" hidden>
+    <h3>Enter the number under the bars</h3>
+    <div class="inputs">
+      <input type="text" id="manualCode" inputmode="numeric" placeholder="4458534760123" maxlength="14">
+      <button class="primary" id="manualGo">Look up</button>
+    </div>
+  </div>
+
+  <section class="ticket" id="ticket">
+        <div class="brandline">
+      <div class="brand-row" id="brandRow" hidden>
+        <span class="brand-badge-pill">Marque</span>
+        <span class="brand-badge-name" id="tBrand">—</span>
+      </div>
+      <strong id="tName">Waiting for a scan</strong>
+      <em id="tSub">nothing read yet</em>
+    </div>
+
+    <div class="field">
+      <span class="pill ar">رمز المنتج</span>
+      <span class="digits" id="tCode">—</span>
+      <svg class="bars" id="tBars" role="img" aria-label="Barcode rendering" hidden></svg>
+    </div>
+
+    <hr class="dash">
+
+        <div class="field" id="fieldBrand" hidden>
+      <span class="pill">Marque</span>
+      <span class="val bold" id="tBrandField">—</span>
+    </div>
+
+    <hr class="dash" id="dashBrand" hidden>
+
+    <div class="field" id="fieldName">
+      <span class="pill ar">اسم المنتج</span>
+      <span class="val ar" id="tNameAr">—</span>
+      <span class="digits sku" id="tSku"></span>
+    </div>
+
+    <hr class="dash">
+
+    <div class="field">
+      <span class="price" id="tPrice">—<span>DA</span></span>
+      <div class="meta" id="tMeta"></div>
+    </div>
+
+    <div class="unknown" id="tUnknown" hidden>
+      <span id="unknownMsg">This code is not in the catalog yet.</span>
+
+      <div class="ocrRow">
+        <button id="btnOcr">Read the tag</button>
+        <span class="ocrNote" id="ocrNote">the barcode is only a number — the name and price are printed beside it</span>
+      </div>
+
+      <div class="inputs">
+        <input type="text" id="newSku" class="primaryField" placeholder="Référence du produit (PULL AR-195)">
+        <input type="number" id="newPrice" inputmode="numeric" placeholder="Prix en DA">
+      </div>
+      <div class="inputs">
+        <input type="text" id="newBrand" placeholder="Marque (optionnel)">
+        <input type="text" id="newName" placeholder="Désignation (optionnel — Pull)">
+      </div>
+      <div class="inputs">
+        <input type="text" id="newNameAr" class="ar-input" placeholder="الاسم بالعربية (optionnel)">
+      </div>
+      <button class="primary" id="newSave">Save product</button>
+    </div>
+  </section>
+
+  <a class="bigLink" href="database.html">
+    <span class="bigLink-main">
+      <b id="linkCount">0 pieces</b>
+      <em id="linkSub">open the list, totals and printing</em>
+    </span>
+    <span class="bigLink-go" aria-hidden="true">→</span>
+  </a>
+
+  <div>
+    <h2>Just scanned</h2>
+    <div class="list" id="recent"></div>
+  </div>
+
+  <footer>
+    EAN-13 / EAN-8 / UPC / CODE-128 / CODE-39 / ITF<br>
+    <span id="footNote">Starting up…</span>
+  </footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script src="decoder.js"></script>
+<script src="label-parser.js"></script>
+<script src="ocr.js"></script>
+<script src="store.js"></script>
+<script src="scanner.js"></script>
+
+<!-- Deployment self-check. Inline and inline-styled on purpose: it has to
+     work on a page where the stylesheet itself failed to arrive. -->
+<script>
+window.addEventListener("load", function(){
+  var missing = [];
+
+  // Did the stylesheet actually apply? .wrap sets a max-width; if the
+  // computed value is still "none", styles.css never arrived.
+  var probe = document.createElement("div");
+  probe.className = "wrap";
+  probe.style.position = "absolute";
+  probe.style.visibility = "hidden";
+  document.body.appendChild(probe);
+  var styled = getComputedStyle(probe).maxWidth !== "none";
+  probe.parentNode.removeChild(probe);
+  if(!styled) missing.push("styles.css");
+
+  // Each local script defines one global; an absent global means a 404.
+  // Each local script defines one global; an absent global means it did
+  // not load. The path is read off the <script> tag rather than hardcoded,
+  // so this reports correctly both from source (x.js) and from
+  // a built app (x.js next to the page).
+  [["common.js","PDZ"], ["decoder.js","FastDecoder"], ["ocr.js","TagOCR"],
+   ["label-parser.js","LabelParser"],
+   ["store.js","Store"], ["config.js","PYJAMADZ_CONFIG"]].forEach(function(p){
+    if(typeof window[p[1]] !== "undefined") return;
+    var tag = document.querySelector('script[src$="' + p[0] + '"]');
+    missing.push(tag ? tag.getAttribute("src") : p[0]);
+  });
+
+  if(!missing.length) return;
+
+  var base = location.href.replace(/[^\/]*$/, "");
+  var box = document.createElement("div");
+  box.setAttribute("style",
+    "position:fixed;inset:0;z-index:99999;overflow:auto;padding:24px 18px;" +
+    "background:#1a1512;color:#f6efe6;font:14px/1.55 system-ui,sans-serif");
+  box.innerHTML =
+    '<div style="max-width:620px;margin:0 auto">' +
+      '<h2 style="margin:0 0 6px;font-size:19px">Some files did not upload</h2>' +
+      '<p style="margin:0 0 16px;color:#c3b7a6">The page loaded, but the browser could not fetch ' +
+        missing.length + ' file' + (missing.length === 1 ? "" : "s") +
+        '. Every path below must resolve from this page.</p>' +
+      '<ul style="margin:0 0 18px;padding-left:20px">' +
+        missing.map(function(f){
+          return '<li style="margin-bottom:7px"><code style="background:#2c241e;padding:2px 6px;' +
+                 'border-radius:4px">' + f + '</code> &mdash; ' +
+                 '<a href="' + base + f + '" target="_blank" rel="noopener" ' +
+                 'style="color:#ffb37a">open it</a> to see the error</li>';
+        }).join("") +
+      '</ul>' +
+      '<p style="margin:0 0 10px;font-weight:600">Usual causes, most common first</p>' +
+      '<ol style="margin:0 0 18px;padding-left:20px;color:#c3b7a6">' +
+        '<li style="margin-bottom:7px"><b>You deployed the source folder, not the build.</b> ' +
+          'Run <code>node build.js</code> and upload <code>dist/scanner/</code> &mdash; it has ' +
+          'every file flattened next to index.html.</li>' +
+        '<li style="margin-bottom:7px"><b>Only some files were uploaded.</b> Upload the whole ' +
+          'folder, not just index.html.</li>' +
+        '<li style="margin-bottom:7px"><b>Capital letters.</b> Web servers are case-sensitive; ' +
+          'Windows is not. <code>Styles.css</code> works on your PC and 404s once deployed. ' +
+          'Every filename here is lower-case.</li>' +
+      '</ol>' +
+      '<p style="margin:0;color:#8e8272;font-size:12.5px">Looking in: <code>' + base + '</code></p>' +
+    '</div>';
+  document.body.appendChild(box);
+});
+</script>
+</body>
+</html>

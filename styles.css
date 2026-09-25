@@ -1,0 +1,543 @@
+/* ============================================================
+   Pyjama Dz Tag Scanner
+   ============================================================ */
+
+/* --- base reset ------------------------------------------- */
+:root{
+  color-scheme: light dark;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+*{box-sizing:border-box}
+img{max-width:100%}
+[hidden]{display:none !important}
+
+/* --- design tokens ---------------------------------------- */
+:root{
+  --paper:#F2EDE1;
+  --card:#FFFCF4;
+  --ink:#17140F;
+  --muted:#6E6555;
+  --rule:#D9D0BC;
+  --rule-soft:#E8E1D1;
+  --laser:#C4362A;
+  --ok:#2D7A50;
+  --warn:#9A6A12;
+  --chip:#17140F;
+  --chip-ink:#FFFCF4;
+  --shadow:0 1px 0 rgba(23,20,15,.06), 0 8px 24px -16px rgba(23,20,15,.45);
+  --mono:"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans:"Archivo", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --ar:"Noto Sans Arabic","Segoe UI",system-ui,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#100F0D; --card:#1A1815; --ink:#F1EDE2; --muted:#9A9180;
+    --rule:#302C25; --rule-soft:#262320; --laser:#E3594B; --ok:#62BF8B;
+    --warn:#D0A04C; --chip:#F1EDE2; --chip-ink:#100F0D;
+    --shadow:0 1px 0 rgba(0,0,0,.4), 0 10px 28px -18px #000;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#100F0D; --card:#1A1815; --ink:#F1EDE2; --muted:#9A9180;
+  --rule:#302C25; --rule-soft:#262320; --laser:#E3594B; --ok:#62BF8B;
+  --warn:#D0A04C; --chip:#F1EDE2; --chip-ink:#100F0D;
+  --shadow:0 1px 0 rgba(0,0,0,.4), 0 10px 28px -18px #000;
+}
+
+html,body{height:100%}
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--sans);
+  font-size:15px;
+  line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{
+  max-width:540px; margin:0 auto; padding:0 16px;
+  padding-block:0 40px;
+  display:flex; flex-direction:column; gap:18px;
+}
+
+/* --- header ----------------------------------------------- */
+header.bar{
+  position:sticky; top:env(safe-area-inset-top, 0px); z-index:20;
+  background:color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--rule-soft);
+  margin:0 -16px 0; padding:11px 16px;
+  display:flex; align-items:center; gap:10px;
+}
+.mark{font-weight:700;font-size:17px;letter-spacing:-.015em;display:flex;align-items:baseline;gap:7px}
+.mark small{
+  font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--muted);
+}
+.bar .spacer{flex:1}
+.sync{
+  display:inline-flex;align-items:center;gap:6px;
+  font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--muted);border:1px solid var(--rule);border-radius:99px;padding:3px 9px;
+  white-space:nowrap;
+}
+.sync i{width:6px;height:6px;border-radius:50%;background:var(--muted);flex:none;font-style:normal}
+.sync[data-s="cloud"]{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,transparent)}
+.sync[data-s="cloud"] i{background:var(--ok)}
+.sync[data-s="local"]{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,transparent)}
+.sync[data-s="local"] i{background:var(--warn)}
+
+/* --- camera viewport -------------------------------------- */
+.scope{
+  position:relative;aspect-ratio:4/3;max-width:100%;
+  border-radius:14px;overflow:hidden;background:#0C0B0A;
+  border:1px solid var(--rule);box-shadow:var(--shadow);
+  display:grid;place-items:center;
+}
+/* contain, not cover: show everything the camera sees. JS sets .scope's
+   aspect-ratio to the stream's own, so in practice there is nothing to
+   letterbox — and nothing gets cropped away either. */
+.scope video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#0C0B0A}
+.idle{
+  position:relative;text-align:center;color:#B8AF9C;padding:24px 20px;
+  display:flex;flex-direction:column;align-items:center;gap:14px;
+}
+.idle p{margin:0;max-width:28ch;font-size:13px;line-height:1.5}
+/* Matches the decoder's primary crop (84% x 40%) so that aiming
+   inside the brackets really is aiming where it looks first. */
+.reticle{position:absolute;inset:30% 8%;pointer-events:none}
+.reticle span{position:absolute;width:26px;height:26px;border:2px solid rgba(255,252,244,.9)}
+.reticle span:nth-child(1){top:0;left:0;border-right:0;border-bottom:0;border-radius:4px 0 0 0}
+.reticle span:nth-child(2){top:0;right:0;border-left:0;border-bottom:0;border-radius:0 4px 0 0}
+.reticle span:nth-child(3){bottom:0;left:0;border-right:0;border-top:0;border-radius:0 0 0 4px}
+.reticle span:nth-child(4){bottom:0;right:0;border-left:0;border-top:0;border-radius:0 0 4px 0}
+.laser{
+  position:absolute;left:8%;right:8%;height:2px;top:50%;
+  background:linear-gradient(90deg,transparent,var(--laser),transparent);
+  box-shadow:0 0 12px var(--laser);animation:sweep 2.4s ease-in-out infinite;pointer-events:none;
+}
+@keyframes sweep{0%,100%{transform:translateY(-58px)}50%{transform:translateY(58px)}}
+.scope[data-state="idle"] .reticle,.scope[data-state="idle"] .laser{display:none}
+.flash{position:absolute;inset:0;background:var(--chip-ink);opacity:0;pointer-events:none}
+
+/* tap-to-focus marker, like a phone camera app */
+.focusRing{
+  position:absolute;width:62px;height:62px;margin:-31px 0 0 -31px;
+  border:2px solid rgba(255,252,244,.92);border-radius:50%;
+  pointer-events:none;animation:focusPop .7s ease-out forwards;
+}
+@keyframes focusPop{
+  0%{transform:scale(1.5);opacity:0}
+  25%{transform:scale(1);opacity:1}
+  100%{transform:scale(.92);opacity:0}
+}
+@media (prefers-reduced-motion: reduce){
+  .focusRing{animation:none;opacity:.9}
+}
+
+/* zoom is the only thing that genuinely extends reading distance,
+   so it gets a control on the picture itself */
+.zoomBar{
+  position:absolute;
+  left:50%;transform:translateX(-50%);
+  bottom:calc(10px + env(safe-area-inset-bottom, 0px));
+  display:flex;gap:2px;padding:3px;
+  /* no backdrop-filter: it blurred the camera strip behind the bar */
+  background:rgba(12,11,10,.82);
+  border-radius:99px;
+}
+.zoomBar button{
+  border:0;background:transparent;color:#EDE7DA;
+  font-family:var(--mono);font-size:11.5px;font-weight:500;
+  padding:5px 11px;border-radius:99px;line-height:1;
+}
+.zoomBar button:hover{background:rgba(255,252,244,.14)}
+.zoomBar button[aria-pressed="true"]{background:#FFFCF4;color:#17140F;font-weight:600}
+.scope[data-state="idle"] .zoomBar{display:none}
+.flash.hit{animation:blip .28s ease-out}
+@keyframes blip{from{opacity:.75}to{opacity:0}}
+
+/* --- controls --------------------------------------------- */
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.spacer{flex:1}
+button{
+  font-family:var(--sans);font-size:14px;font-weight:600;color:var(--ink);
+  background:var(--card);border:1px solid var(--rule);border-radius:9px;
+  padding:10px 14px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;line-height:1.2;
+}
+button:hover{border-color:var(--muted)}
+button:focus-visible{outline:2px solid var(--laser);outline-offset:2px}
+button[disabled]{opacity:.45;cursor:not-allowed}
+button.primary{background:var(--chip);color:var(--chip-ink);border-color:var(--chip)}
+button.ghost{background:transparent}
+button.tiny{font-size:12px;padding:6px 10px;font-weight:500}
+button.danger{color:var(--laser);border-color:color-mix(in srgb,var(--laser) 45%,transparent)}
+.grow{flex:1 1 auto;justify-content:center}
+label.file{position:relative;overflow:hidden}
+label.file input{position:absolute;inset:0;opacity:0;width:100%;cursor:pointer}
+
+.status{
+  font-family:var(--mono);font-size:12px;color:var(--muted);
+  display:flex;gap:8px;align-items:flex-start;min-height:18px;margin:0;
+}
+.status b{color:var(--ink);font-weight:500}
+.status.err b{color:var(--laser)}
+.status em{font-style:normal;color:var(--ink)}
+
+.notice{
+  border:1px solid color-mix(in srgb,var(--warn) 45%,transparent);
+  background:color-mix(in srgb,var(--warn) 8%,var(--card));
+  border-radius:10px;padding:12px 14px;
+  display:flex;flex-wrap:wrap;align-items:center;gap:10px;font-size:13px;
+}
+.notice span{flex:1 1 180px;min-width:0}
+
+/* --- the tag ticket --------------------------------------- */
+.ticket{
+  background:var(--card);border:1px solid var(--rule);border-radius:12px;
+  box-shadow:var(--shadow);padding:18px 18px 16px;
+  display:flex;flex-direction:column;gap:14px;
+}
+.ticket .brandline{
+  text-align:center;display:flex;flex-direction:column;gap:2px;
+  padding-bottom:12px;border-bottom:1px solid var(--ink);
+}
+.ticket .brandline strong{font-size:17px;letter-spacing:-.01em}
+.ticket .brandline em{
+  font-style:normal;font-family:var(--mono);font-size:10px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--muted);
+}
+.pill{
+  align-self:center;background:var(--chip);color:var(--chip-ink);border-radius:99px;
+  padding:3px 14px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+}
+.pill.ar{font-family:var(--ar);letter-spacing:0;text-transform:none;font-size:12px}
+.field{display:flex;flex-direction:column;align-items:center;gap:7px;text-align:center}
+.field .val{font-size:20px;font-weight:600;letter-spacing:-.01em}
+.field .val.ar{font-family:var(--ar)}
+.digits{
+  font-family:var(--mono);font-size:19px;font-weight:500;letter-spacing:.14em;
+  font-variant-numeric:tabular-nums;word-break:break-all;
+}
+.digits.sku{font-size:13px;letter-spacing:.1em}
+.price{font-size:34px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.price span{font-size:15px;font-weight:600;color:var(--muted);margin-inline-start:4px}
+.dash{border:0;border-top:1px dashed var(--rule);margin:0;width:100%}
+.meta{
+  display:flex;flex-wrap:wrap;justify-content:center;gap:6px 8px;
+  font-family:var(--mono);font-size:11px;color:var(--muted);
+}
+.tag{border:1px solid var(--rule);border-radius:5px;padding:2px 7px;white-space:nowrap}
+.tag.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,transparent)}
+.tag.bad{color:var(--laser);border-color:color-mix(in srgb,var(--laser) 45%,transparent)}
+.bars{width:100%;max-width:280px;height:64px;color:var(--ink)}
+.unknown{
+  text-align:center;color:var(--muted);font-size:13px;
+  display:flex;flex-direction:column;gap:10px;align-items:center;
+}
+
+/* --- totals ----------------------------------------------- */
+.session{
+  display:flex;align-items:center;gap:14px;border:1px solid var(--rule);
+  border-radius:10px;background:var(--card);padding:11px 14px;flex-wrap:wrap;
+}
+.stat{display:flex;flex-direction:column;line-height:1.15}
+.stat b{font-size:17px;font-weight:700;font-variant-numeric:tabular-nums}
+.stat em{
+  font-style:normal;font-family:var(--mono);font-size:10px;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--muted);
+}
+.session .spacer{flex:1}
+
+/* --- lists ------------------------------------------------ */
+h2{
+  margin:0 0 8px;font-size:11px;font-family:var(--mono);font-weight:500;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--muted);
+  display:flex;align-items:center;gap:10px;
+}
+h2::after{content:"";flex:1;height:1px;background:var(--rule-soft)}
+h2 .count{font-family:var(--sans);letter-spacing:0;text-transform:none;font-size:12px}
+.list{
+  display:flex;flex-direction:column;gap:1px;background:var(--rule-soft);
+  border:1px solid var(--rule-soft);border-radius:10px;overflow:hidden;
+}
+.row{background:var(--card);display:flex;align-items:center;gap:12px;padding:11px 12px}
+.row .code{font-family:var(--mono);font-size:12.5px;font-variant-numeric:tabular-nums;letter-spacing:.04em}
+.row .name{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .name .ar{font-family:var(--ar)}
+.row .pname{
+  font-size:15px;font-weight:600;letter-spacing:-.01em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.row .pname.none{font-weight:500;color:var(--muted)}
+.row .col{display:flex;flex-direction:column;min-width:0;flex:1;gap:1px}
+.row .amt{font-weight:600;font-variant-numeric:tabular-nums;font-size:13.5px;white-space:nowrap}
+.row .right{display:flex;flex-direction:column;align-items:flex-end;gap:2px;white-space:nowrap}
+.row .qty{
+  font-family:var(--mono);font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;
+  background:var(--chip);color:var(--chip-ink);border-radius:6px;padding:1px 7px;
+}
+.row .qty.one{background:transparent;color:var(--muted);border:1px solid var(--rule);font-weight:500}
+.row .x{border:0;background:transparent;color:var(--muted);font-size:17px;line-height:1;padding:6px 7px;border-radius:6px}
+.row .x:hover{color:var(--laser)}
+.row .namebtn{
+  font-size:11.5px;font-weight:600;padding:5px 9px;border-radius:7px;
+  background:var(--chip);color:var(--chip-ink);border:0;white-space:nowrap;
+}
+.row.pick{cursor:pointer}
+.row.pick:hover{background:color-mix(in srgb,var(--ink) 4%,var(--card))}
+.row.fresh{animation:land .5s ease-out}
+@keyframes land{from{background:color-mix(in srgb,var(--ok) 16%,var(--card))}to{background:var(--card)}}
+.empty{background:var(--card);padding:22px 16px;text-align:center;color:var(--muted);font-size:13px}
+
+/* --- forms ------------------------------------------------ */
+.panel{
+  border:1px solid var(--rule);border-radius:10px;background:var(--card);
+  padding:14px;display:flex;flex-direction:column;gap:10px;
+}
+.panel h3{margin:0;font-size:13px;font-weight:600}
+.panel p{margin:0;font-size:12.5px;color:var(--muted)}
+.inputs{display:flex;flex-wrap:wrap;gap:8px}
+input[type="text"],input[type="number"]{
+  font-family:var(--mono);font-size:14px;color:var(--ink);background:var(--paper);
+  border:1px solid var(--rule);border-radius:8px;padding:9px 11px;min-width:0;flex:1 1 120px;
+}
+input.ar-input{font-family:var(--ar)}
+
+/* a value OCR suggested — visibly not yet confirmed by a person */
+/* The reference is the field that matters on these tags — it leads
+   the form and carries a little more weight than the optional ones. */
+input.primaryField{
+  font-weight:600;
+  flex:1 1 200px;
+  border-color:var(--muted);
+}
+
+/* Low confidence: the parser is unsure, so the field reads as a
+   proposal to check rather than an answer. Never a silent guess. */
+input.prefilled.lowconf{
+  border-color:color-mix(in srgb,var(--laser) 55%,transparent);
+  background:color-mix(in srgb,var(--laser) 8%,var(--paper));
+}
+.ocrNote[data-conf="low"] b{color:var(--laser)}
+
+input.prefilled{
+  border-color:color-mix(in srgb,var(--warn) 55%,transparent);
+  background:color-mix(in srgb,var(--warn) 9%,var(--paper));
+}
+.ocrRow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;justify-content:center;width:100%}
+.ocrRow button{font-size:12.5px;padding:7px 12px}
+.ocrNote{
+  flex:1 1 180px;min-width:0;text-align:left;
+  font-size:11.5px;line-height:1.4;color:var(--muted);
+}
+.ocrNote b{color:var(--ink);font-weight:600}
+input:focus-visible{outline:2px solid var(--laser);outline-offset:1px}
+input::placeholder{color:var(--muted);opacity:.8}
+textarea{
+  font-family:var(--mono);font-size:12px;width:100%;
+  border:1px solid var(--rule);border-radius:8px;background:var(--paper);color:var(--ink);
+  padding:8px;min-height:90px;resize:vertical;
+}
+footer{font-family:var(--mono);font-size:10.5px;color:var(--muted);text-align:center;line-height:1.7}
+
+/* --- the link between the two pages ----------------------- */
+.bigLink{
+  display:flex;align-items:center;gap:14px;
+  border:1px solid var(--rule);border-radius:12px;background:var(--card);
+  padding:14px 16px;text-decoration:none;color:inherit;box-shadow:var(--shadow);
+}
+.bigLink:hover{border-color:var(--muted)}
+.bigLink:focus-visible{outline:2px solid var(--laser);outline-offset:2px}
+.bigLink-main{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
+.bigLink-main b{font-size:15px;font-weight:600;letter-spacing:-.01em}
+.bigLink-main em{
+  font-style:normal;font-size:12px;color:var(--muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.bigLink-go{
+  font-size:20px;color:var(--muted);flex:none;
+  width:34px;height:34px;border-radius:50%;border:1px solid var(--rule);
+  display:grid;place-items:center;
+}
+.bigLink:hover .bigLink-go{color:var(--ink);border-color:var(--muted)}
+.empty a{color:var(--ink)}
+
+/* --- the printable sheet ---------------------------------- */
+/* Hidden on screen; the print rules below are the only place
+   it is ever visible. Built fresh by database.js each time. */
+.sheet{display:none}
+
+@media print{
+  /* the app chrome has no business on paper */
+  .noprint{display:none !important}
+  :root{padding:0}
+  html,body{height:auto;background:#fff;color:#000}
+  .wrap{display:none}
+
+  .sheet{
+    display:block;
+    font-family:var(--sans);
+    color:#000;
+    padding:0;
+    font-size:10pt;
+  }
+  .sheet-head{
+    display:flex;align-items:flex-start;justify-content:space-between;gap:20px;
+    border-bottom:1.5pt solid #000;padding-bottom:8pt;margin-bottom:10pt;
+  }
+  .sheet-head h1{margin:0;font-size:16pt;letter-spacing:-.01em}
+  .sheet-head p{margin:2pt 0 0;font-size:9pt;color:#555}
+  .sheet-tot{text-align:right;white-space:nowrap}
+  .sheet-tot b{display:block;font-size:15pt}
+  .sheet-tot span{font-size:8.5pt;color:#555}
+
+  .sheet-table{width:100%;border-collapse:collapse}
+  .sheet-table th{
+    text-align:left;font-size:7.5pt;letter-spacing:.08em;text-transform:uppercase;
+    color:#000;border-bottom:.5pt solid #999;padding:0 4pt 4pt;
+  }
+  .sheet-table td{
+    padding:4.5pt 4pt;border-bottom:.3pt solid #ddd;vertical-align:top;font-size:9.5pt;
+  }
+  .sheet-table .n{text-align:right;white-space:nowrap}
+  .sheet-table th.n{text-align:right}
+  .sheet-table .mono{font-family:var(--mono);font-size:8.5pt}
+  .sheet-table .ar{font-family:var(--ar);color:#444}
+  .sheet-table .none{text-align:center;color:#777;padding:14pt 0}
+  .sheet-table tfoot td{
+    border-top:1.2pt solid #000;border-bottom:0;
+    font-weight:700;font-size:10.5pt;padding-top:6pt;
+  }
+  .sheet-note{font-size:8pt;color:#666;margin-top:8pt}
+
+  /* keep rows whole across a page break */
+  .sheet-table tr{page-break-inside:avoid}
+  .sheet-table thead{display:table-header-group}
+
+  @page{ size:A4; margin:14mm 12mm 16mm; }
+}
+
+@media (prefers-reduced-motion: reduce){
+  .laser,.row.fresh{animation:none}
+}
+
+/* ============================================================
+   Intelligent Camera & Brand Enhancements
+   ============================================================ */
+.smart-btn{
+  background: linear-gradient(135deg, #c4362a, #e3594b);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.15);
+  box-shadow: 0 2px 10px rgba(196, 54, 42, 0.35);
+  font-weight: 700;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.smart-btn:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(196, 54, 42, 0.45);
+  border-color: rgba(255,255,255,0.3);
+}
+.smart-btn:active{
+  transform: translateY(1px);
+}
+
+.smart-hud{
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  z-index: 10;
+  pointer-events: none;
+  /* Solid, not frosted: backdrop-filter blurs the live camera behind
+     this panel, and re-filters it every frame for no benefit. */
+  background: rgba(16, 15, 13, 0.92);
+  border: 1px solid rgba(255, 252, 244, 0.14);
+  border-radius: 12px;
+  padding: 9px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.smart-hud[hidden]{ display: none !important; }
+.smart-hud.pulse{
+  animation: hudPulse 0.4s ease-out;
+}
+@keyframes hudPulse{
+  0%{ transform: scale(0.98); }
+  50%{ transform: scale(1.02); }
+  100%{ transform: scale(1); }
+}
+.smart-hud-title{
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #EDE7DA;
+}
+.smart-hud-dot{
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #62BF8B;
+  box-shadow: 0 0 8px #62BF8B;
+  animation: pulseDot 1.8s infinite;
+}
+@keyframes pulseDot{
+  0%,100%{ opacity: 1; transform: scale(1); }
+  50%{ opacity: 0.4; transform: scale(0.8); }
+}
+.smart-hud-chips{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.hud-chip{
+  background: rgba(255, 252, 244, 0.08);
+  border: 1px solid rgba(255, 252, 244, 0.12);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11.5px;
+  color: #EDE7DA;
+  font-family: var(--mono);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.hud-chip b{ color: #9A9180; font-weight: 500; }
+.hud-chip i{ font-style: normal; color: #FFFCF4; font-weight: 600; }
+
+.brand-row{
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.brand-badge-pill{
+  background: color-mix(in srgb, var(--laser) 15%, transparent);
+  color: var(--laser);
+  border: 1px solid color-mix(in srgb, var(--laser) 35%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 7px;
+  border-radius: 4px;
+  line-height: 1.2;
+}
+.brand-badge-name{
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: 0.02em;
+}
+.brand-sub, .bname{
+  font-weight: 600;
+  color: var(--ink);
+}
