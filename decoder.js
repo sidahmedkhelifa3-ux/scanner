@@ -403,6 +403,9 @@
     }
   };
 
+  /* The user worked the flash themselves: stop deciding for them. */
+  FastDecoder.prototype.holdTorch = function(){ this.torchAuto = true; };
+
   FastDecoder.prototype._autoTorch = function(q){
     if(this.torchAuto || !this.track || !q) return;
     if(q.luma >= DARK_LUMA) return;

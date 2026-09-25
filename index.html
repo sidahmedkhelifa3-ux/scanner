@@ -45,6 +45,14 @@
     <div class="reticle"><span></span><span></span><span></span><span></span></div>
     <div class="laser"></div>
     <div class="flash" id="flash"></div>
+    <div class="camBar" id="camBar" hidden>
+      <button id="btnTorch" aria-pressed="false" title="Flash / torche">
+        <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
+          <path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z" fill="currentColor"/>
+        </svg>
+        <span id="torchLabel">Flash</span>
+      </button>
+    </div>
     <div class="zoomBar" id="zoomBar" hidden>
       <button data-zoom="1">1×</button>
       <button data-zoom="2">2×</button>
@@ -56,8 +64,7 @@
   <div class="controls">
     <button class="primary grow" id="btnStart">Start camera</button>
     <button class="smart-btn" id="btnSmartScan" title="Scan intelligent (Code-barres + Marque + Référence)">⚡ Scan intelligent</button>
-    
-    <button id="btnTorch" hidden>Torch</button>
+
     <label class="file" id="lblPhoto"><button class="ghost" tabindex="-1" aria-hidden="true">Scan a photo</button>
       <input type="file" id="filePhoto" accept="image/*" capture="environment" aria-label="Scan a barcode from a photo">
     </label>

@@ -486,7 +486,7 @@
     scope.setAttribute("data-state","idle");
     btnStart.textContent = "Start camera";
     btnStart.classList.add("primary");
-    btnTorch.hidden = true;
+    $("camBar").hidden = true;
     $("zoomBar").hidden = true;
     torchOn = false;
     scope.style.aspectRatio = "";     // back to the idle placeholder shape
@@ -570,9 +570,8 @@
   function onCoach(msg){ say("<b>" + esc(msg) + "</b>"); }
 
   function onAutoTorch(on){
-    torchOn = on;
-    btnTorch.hidden = false;
-    btnTorch.textContent = on ? "Torch off" : "Torch";
+    $("camBar").hidden = false;
+    paintTorch(on);
   }
 
   /* ---- zoom: the one control that really extends reading distance ---- */
@@ -674,18 +673,42 @@
     }catch(e){}
   }
 
+  /* Flash / torch. Shown only when the camera actually reports one —
+     iOS Safari exposes no torch control to web pages at all, so there
+     the button stays hidden rather than pretending. */
+  function paintTorch(on){
+    torchOn = !!on;
+    btnTorch.setAttribute("aria-pressed", torchOn ? "true" : "false");
+    var label = $("torchLabel");
+    if(label) label.textContent = torchOn ? "Flash on" : "Flash";
+  }
+
+  function setTorch(on){
+    if(!stream) return Promise.resolve(false);
+    var track = stream.getVideoTracks()[0];
+    if(!track || !track.applyConstraints) return Promise.resolve(false);
+    return track.applyConstraints({ advanced: [{ torch: !!on }] })
+      .then(function(){ paintTorch(on); return true; })
+      .catch(function(){
+        $("camBar").hidden = true;          // the camera lied about torch
+        return false;
+      });
+  }
+
   function setupTorch(){
     try{
       var track = stream.getVideoTracks()[0];
       var caps = track && track.getCapabilities ? track.getCapabilities() : {};
-      if(!caps || !caps.torch) return;
-      btnTorch.hidden = false;
-      btnTorch.textContent = "Torch";
+      if(!caps || !caps.torch){ $("camBar").hidden = true; return; }
+
+      $("camBar").hidden = false;
+      paintTorch(false);
+
       btnTorch.onclick = function(){
-        torchOn = !torchOn;
-        track.applyConstraints({ advanced: [{ torch: torchOn }] })
-          .then(function(){ btnTorch.textContent = torchOn ? "Torch off" : "Torch"; })
-          .catch(function(){ btnTorch.hidden = true; });
+        // Once you choose, the automatic dark-detection stops second-
+        // guessing you — same rule as zoom and focus.
+        if(decoder && decoder.holdTorch) decoder.holdTorch();
+        setTorch(!torchOn);
       };
     }catch(e){}
   }

@@ -160,6 +160,25 @@ header.bar{
 .zoomBar button:hover{background:rgba(255,252,244,.14)}
 .zoomBar button[aria-pressed="true"]{background:#FFFCF4;color:#17140F;font-weight:600}
 .scope[data-state="idle"] .zoomBar{display:none}
+
+/* flash / torch, top-right of the picture like a phone camera app */
+.camBar{
+  position:absolute;
+  top:calc(10px + env(safe-area-inset-top, 0px));
+  right:10px;
+  display:flex;gap:2px;padding:3px;
+  background:rgba(12,11,10,.82);
+  border-radius:99px;
+}
+.camBar button{
+  border:0;background:transparent;color:#EDE7DA;
+  font-family:var(--mono);font-size:11.5px;font-weight:500;
+  padding:5px 11px;border-radius:99px;line-height:1;
+  display:inline-flex;align-items:center;gap:5px;
+}
+.camBar button:hover{background:rgba(255,252,244,.14)}
+.camBar button[aria-pressed="true"]{background:#FFE08A;color:#17140F;font-weight:600}
+.scope[data-state="idle"] .camBar{display:none}
 .flash.hit{animation:blip .28s ease-out}
 @keyframes blip{from{opacity:.75}to{opacity:0}}
 
