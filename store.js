@@ -185,7 +185,7 @@
         self._scans = (res.data || []).map(function(r){
           return {
             id: r.id, code: r.code, name: r.name, sku: r.sku, brand: r.brand || "",
-            price: num(r.price), at: r.scanned_at
+            source: r.source || "", price: num(r.price), at: r.scanned_at
           };
         });
         if(self._scanFn) self._scanFn(self._scans);
@@ -196,25 +196,36 @@
      database error never reaches .catch(). Retrying on rejection was
      therefore dead code. This inspects the error instead, and drops the
      `brand` column only when the schema predates it. */
-  function isMissingColumn(err, col){
-    if(!err) return false;
-    if(err.code === "42703" || err.code === "PGRST204") return true;   // undefined column
-    var text = ((err.message || "") + " " + (err.details || "") + " " + (err.hint || "")).toLowerCase();
-    return text.indexOf("column") > -1 && text.indexOf(col) > -1;
+  /* Which column did the database not recognise? PostgREST says
+     "Could not find the 'source' column"; Postgres says
+     column "source" of relation ... does not exist. */
+  function missingColumnName(err){
+    if(!err) return null;
+    var text = (err.message || "") + " " + (err.details || "") + " " + (err.hint || "");
+    var m = text.match(/'([A-Za-z_][A-Za-z0-9_]*)'\s+column/i) ||
+            text.match(/column\s+"([A-Za-z_][A-Za-z0-9_]*)"/i) ||
+            text.match(/column\s+([A-Za-z_][A-Za-z0-9_]*)\s+of/i);
+    return m ? m[1] : null;
   }
 
-  function withoutBrand(row){
+  function omit(row, key){
     var copy = {};
-    for(var k in row){ if(k !== "brand") copy[k] = row[k]; }
+    for(var k in row){ if(k !== key) copy[k] = row[k]; }
     return copy;
   }
 
-  /* run(row) must return a supabase query builder */
-  function sendRow(run, row){
+  /* run(row) must return a supabase query builder.
+
+     A schema that predates a column should cost the user that ONE
+     field, not the whole scan. So when the database rejects a column
+     it does not know, drop exactly that column and try again — rather
+     than failing the write and losing the record entirely. */
+  function sendRow(run, row, depth){
+    depth = depth || 0;
     return run(row).then(function(res){
-      if(res && res.error && row.brand !== undefined && isMissingColumn(res.error, "brand")){
-        return run(withoutBrand(row));      // older schema: save the rest
-      }
+      if(!res || !res.error || depth >= 3) return res;
+      var col = missingColumnName(res.error);
+      if(col && row[col] !== undefined) return sendRow(run, omit(row, col), depth + 1);
       return res;
     });
   }
@@ -230,6 +241,8 @@
       scanned_at: rec.at || new Date().toISOString()
     };
     if(rec.brand) row.brand = rec.brand;
+    // camera | gun | manual | photo — which input produced this scan
+    if(rec.source) row.source = rec.source;
     return sendRow(function(r){
       return self.sb.from("scans").insert(r);
     }, row).then(function(res){
@@ -324,7 +337,10 @@
   global.Store = {
     open: open,
     readStash: LocalStore.readStash,
-    clearStash: LocalStore.clearStash
+    clearStash: LocalStore.clearStash,
+    // exposed so the degradation path can be tested against the real
+    // error strings PostgREST and Postgres actually emit
+    missingColumnName: missingColumnName
   };
 
 })(window);

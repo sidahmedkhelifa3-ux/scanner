@@ -83,6 +83,28 @@ header.bar{
   white-space:nowrap;
 }
 .sync i{width:6px;height:6px;border-radius:50%;background:var(--muted);flex:none;font-style:normal}
+
+/* which input is in use — camera or gun */
+.modeChip{
+  font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--chip-ink);background:var(--chip);border-radius:99px;padding:3px 9px;
+  white-space:nowrap;
+}
+
+/* the gun needs no camera, so it gets its own ready state */
+.gunReady{
+  display:flex;align-items:center;gap:10px;
+  border:1px solid color-mix(in srgb,var(--ok) 45%,transparent);
+  background:color-mix(in srgb,var(--ok) 9%,var(--card));
+  border-radius:10px;padding:11px 14px;font-size:13px;
+}
+.gunReady b{font-weight:600}
+.gunReady-dot{
+  width:8px;height:8px;border-radius:50%;background:var(--ok);flex:none;
+  animation:gunPulse 1.8s ease-in-out infinite;
+}
+@keyframes gunPulse{0%,100%{opacity:1}50%{opacity:.35}}
+@media (prefers-reduced-motion: reduce){ .gunReady-dot{animation:none} }
 .sync[data-s="cloud"]{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,transparent)}
 .sync[data-s="cloud"] i{background:var(--ok)}
 .sync[data-s="local"]{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,transparent)}

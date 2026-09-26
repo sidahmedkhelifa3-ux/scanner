@@ -217,8 +217,57 @@
     return point;
   }
 
+  /* ---------- misread detection ----------
+     A misread of a barcode is nearly the barcode: 9311460226710 comes
+     back as 9001460226710. The check digit cannot catch it (that one is
+     valid) and repeated frames cannot either (a blurred tag misreads
+     the same way every time). What DOES give it away is history — the
+     real code has been scanned many times, the misread has never been
+     seen before in its life. */
+  function editDistance(a, b){
+    a = String(a); b = String(b);
+    var m = a.length, n = b.length, i, j;
+    var prev = [], cur = [];
+    for(j = 0; j <= n; j++) prev[j] = j;
+    for(i = 1; i <= m; i++){
+      cur[0] = i;
+      for(j = 1; j <= n; j++){
+        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1,
+                          prev[j - 1] + (a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1));
+      }
+      for(j = 0; j <= n; j++) prev[j] = cur[j];
+    }
+    return prev[n];
+  }
+
+  /* counts: { code: timesSeen }. Returns the established code this one
+     looks like a misread of, or null. Only fires for a code never seen
+     before — once a code is accepted it is history itself and is never
+     questioned again. */
+  function nearDuplicate(code, counts, opts){
+    if(!code || !counts) return null;
+    if(counts[code]) return null;                 // seen before: it is real
+    var minSeen = (opts && opts.minSeen) || 3;
+    /* Scale with length: 3 changed digits in a 13-digit EAN is still
+       obviously the same barcode misread, while 3 in an 8-digit code is
+       a different code entirely. A false flag costs one tap; a missed
+       misread quietly corrupts the stock count. */
+    var maxEdits = (opts && opts.maxEdits) || (code.length >= 12 ? 3 : 2);
+
+    var best = null, bestDist = 99;
+    for(var other in counts){
+      if(!counts.hasOwnProperty(other)) continue;
+      if(counts[other] < minSeen) continue;
+      if(Math.abs(other.length - code.length) > 1) continue;
+      var d = editDistance(code, other);
+      if(d > 0 && d <= maxEdits && d < bestDist){ bestDist = d; best = other; }
+    }
+    return best ? { near: best, dist: bestDist, seen: counts[best] } : null;
+  }
+
   global.PDZ = {
     appUrl: appUrl, isSplit: isSplit,
+    editDistance: editDistance, nearDuplicate: nearDuplicate,
     pointInImage: pointInImage, snapToBox: snapToBox,
     esc: esc, money: money, clock: clock, stamp: stamp,
     guessFormat: guessFormat, checksumState: checksumState,

@@ -51,5 +51,29 @@ window.PYJAMADZ_CONFIG = {
   databaseUrl: "",       // e.g. "https://pyjamadz-stock.netlify.app"
 
   // How many recent scans to keep on screen.
-  scanWindow: 500
+  scanWindow: 500,
+
+  /* ----------------------------------------------------------------
+     WHICH DECODER READS THE BARCODE
+
+     "auto"   the phone's own engine if it has one (Android = Google
+              Play Services), otherwise zbar-wasm, otherwise ZXing.
+              Fastest, and right for most phones.
+
+     "zbar"   always use zbar-wasm and ignore the phone's engine.
+              Use this if the built-in one misreads YOUR tags — it is
+              slower per frame but a different algorithm entirely.
+
+     "cross"  STRICTEST. The phone's engine and zbar-wasm must BOTH
+              read the same number before it counts. Roughly halves
+              the scan rate, and all but eliminates wrong numbers,
+              because two unrelated decoders rarely invent the same
+              mistake. Use this if you are still seeing bad reads.
+
+     "native" / "zxing"  force one specific engine, for comparing.
+
+     The engine actually in use is shown when the camera starts, so
+     you can tell which one produced a bad read.
+     ---------------------------------------------------------------- */
+  engine: "cross"
 };
