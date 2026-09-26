@@ -145,6 +145,10 @@
     if($("hudValRef")) $("hudValRef").textContent = sku || "—";
     if($("hudValPrice")) $("hudValPrice").textContent = price != null ? money(price) + " DA" : "—";
     hud.hidden = false;
+    // brief flash, so a fresh read registers without reading the text
+    hud.classList.remove("pulse");
+    void hud.offsetWidth;
+    hud.classList.add("pulse");
   }
 
   /* ================= reading the printed text ================= */
@@ -322,7 +326,6 @@
   /* The last structured result, in the shape the spec asks for:
      { barcode, productCode, productName, price, confidence } */
   var lastResult = null;
-  function scanResult(){ return lastResult; }
 
   /* Never silently guess. Below 0.7 the fields are shown as a proposal
      that has to be looked at; above it, they read as confirmed. */
@@ -344,9 +347,10 @@
   $("btnOcr").addEventListener("click", function(){ readTag(false); });
 
   /* ================= writes ================= */
-  function saveScan(code, format, brand){
+  function saveScan(code, format, brand, source){
     var item = catalog[code];
     return store.addScan({
+      source: source || "camera",
       code: code,
       brand: item ? (item.brand || null) : (brand || null),
       name: item ? (item.name || null) : null,
@@ -413,13 +417,63 @@
 
   /* ================= accept a code ================= */
   var lastCode = "", lastAt = 0, pendingBox = null;
-  function accept(code, format, box, quiet, ocrPreload){
+
+  /* How many times each code has been seen, from the scan list and the
+     catalog. This is the history a misread cannot fake. */
+  function codeCounts(){
+    var counts = {};
+    for(var i = 0; i < scans.length; i++){
+      counts[scans[i].code] = (counts[scans[i].code] || 0) + 1;
+    }
+    for(var c in catalog){ if(!counts[c]) counts[c] = 3; }   // named = established
+    return counts;
+  }
+
+  /* Park a suspicious read instead of writing it. */
+  function holdSuspect(code, format, box, risk, source){
+    beep(false);
+    $("suspect").hidden = false;
+    $("suspectText").innerHTML =
+      "<b>" + esc(code) + "</b> has never been scanned before and differs by " +
+      risk.dist + (risk.dist === 1 ? " digit" : " digits") + " from <b>" +
+      esc(risk.near) + "</b>, scanned " + risk.seen + " times. " +
+      "Probablement une erreur de lecture — rien n'a été enregistré.";
+
+    $("suspectDrop").onclick = function(){
+      $("suspect").hidden = true;
+      say("<b>Ignoré.</b> " + esc(code) + " was not recorded.");
+    };
+    $("suspectKeep").onclick = function(){
+      $("suspect").hidden = true;
+      lastCode = "";                       // let it through the repeat guard
+      accept(code, format, box, true, null, true, source);
+    };
+
+    say("<b>Lecture suspecte.</b> " + esc(code) + " looks like a misread of " +
+        esc(risk.near) + " — confirm below if it is genuine.", true);
+  }
+  /* `forced` = the user confirmed a held suspicious read.
+     `source` = camera | gun | manual | photo. */
+  function accept(code, format, box, quiet, ocrPreload, forced, source){
     code = String(code).trim();
     if(!code || !store) return;
     var now = Date.now();
     var repeated = code === lastCode && now - lastAt < 2500;
     if(repeated && !ocrPreload) return;   // one tag, one count; still accept its OCR details
-    if(!repeated){ lastCode = code; saveScan(code, format, ocrPreload ? ocrPreload.brand : null); }
+
+    /* Hold a code that has never been seen and is a digit or two away
+       from one scanned repeatedly — that is what a misread looks like,
+       and the check digit cannot tell them apart. Nothing is written
+       until it is confirmed. */
+    if(!repeated && !forced){
+      var risk = PDZ.nearDuplicate(code, codeCounts());
+      if(risk){ holdSuspect(code, format, box, risk, source); return; }
+    }
+
+    if(!repeated){
+      lastCode = code;
+      saveScan(code, format, ocrPreload ? ocrPreload.brand : null, source);
+    }
     lastAt = now;
     // keep the barcode's box: it anchors the OCR crop and the parser
     if(box && current && current.code === code) current.box = box;
@@ -559,12 +613,21 @@
       fitPreview();
       tuneCamera();
       setupTorch();
-      decoder = FastDecoder.create(video);
+      decoder = FastDecoder.create(video, {
+        engine: (window.PYJAMADZ_CONFIG || {}).engine
+      });
       return decoder.start(stream, accept, onCoach, onAutoTorch, onZoom);
-    }).then(function(){
-      say(decoder.zoomRange()
-        ? "<b>Scanning.</b> Sweeping the whole picture — tap a zoom if the tag is far."
-        : "<b>Scanning.</b> Sweeping the whole picture at several scales.");
+    }).then(function(engine){
+      // Name the decoder in use, so a wrong read can be blamed on the
+      // right thing rather than guessed at.
+      var named = {
+        native: "phone's own decoder",
+        zbar:   "zbar-wasm",
+        zxing:  "ZXing",
+        cross:  "cross-checked (two decoders must agree)"
+      }[engine] || engine;
+      say("<b>Scanning</b> with the " + esc(named) + "." +
+          (decoder.zoomRange() ? " Tap a zoom if the tag is far." : ""));
     }).catch(function(err){
       var n = (err && err.name) || "";
       if(n === "NotAllowedError") say("<b>Camera permission denied.</b> Allow it, or use <em>Scan a photo</em>.", true);
@@ -816,12 +879,12 @@
       if(hit && hit.text){
         if(global_TagOCR()){
           TagOCR.read(img, hit.text).then(function(ocrRes){
-            accept(hit.text, hit.format, hit.box || null, false, ocrRes);
+            accept(hit.text, hit.format, hit.box || null, false, ocrRes, false, "photo");
           }).catch(function(){
-            accept(hit.text, hit.format, hit.box || null);
+            accept(hit.text, hit.format, hit.box || null, false, null, false, "photo");
           });
         } else {
-          accept(hit.text, hit.format, hit.box || null);
+          accept(hit.text, hit.format, hit.box || null, false, null, false, "photo");
         }
       } else {
         say("<b>Barcode not confirmed.</b> No item was recorded. Move closer, keep the bars uncovered and in focus, then try again.", true);
@@ -830,6 +893,66 @@
       say("<b>Photo decoding failed</b> — " + esc(errText(err)) + ". Use <em>Type code</em>.", true);
     });
   }
+
+  /* ================= hardware scanner (keyboard wedge) =================
+     A USB or Bluetooth barcode gun presents itself to the phone or PC
+     as a KEYBOARD: it types the digits and presses Enter. Nothing to
+     install, nothing to pair in the app — it just needs the keystrokes
+     picked up when no text field has focus.
+
+     Telling it apart from a person typing is timing: a gun emits a
+     whole code in a few milliseconds, a human cannot. */
+  /* Once a gun has been used, remember it: the page then opens ready to
+     scan instead of pushing the camera, which the shop does not need
+     when a gun is on the counter. */
+  var GUN_KEY = "pyjamadz.gun.seen";
+
+  function gunSeen(){
+    try{ return localStorage.getItem(GUN_KEY) === "1"; }catch(e){ return false; }
+  }
+
+  function showGunReady(on){
+    var el = $("gunReady");
+    if(el) el.hidden = !on;
+    var chip = $("inputMode");
+    if(chip){
+      chip.hidden = !on;
+      chip.textContent = "Douchette";
+    }
+  }
+
+  function noteGun(){
+    try{ localStorage.setItem(GUN_KEY, "1"); }catch(e){}
+    showGunReady(true);
+  }
+
+  (function keyboardWedge(){
+    var buf = "", lastKey = 0;
+    var MAX_GAP = 60;    // ms between keystrokes; human typing is far slower
+    var MIN_LEN = 6;
+
+    document.addEventListener("keydown", function(ev){
+      // never steal keystrokes from a field someone is filling in
+      var t = ev.target;
+      if(t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+
+      var now = Date.now();
+      if(now - lastKey > MAX_GAP) buf = "";      // too slow: a person, start over
+      lastKey = now;
+
+      if(ev.key === "Enter"){
+        var code = buf;
+        buf = "";
+        if(code.length < MIN_LEN) return;
+        ev.preventDefault();
+        lastCode = "";                            // a gun may repeat the same tag
+        noteGun();
+        accept(code, PDZ.guessFormat(code), null, true, null, false, "gun");
+        return;
+      }
+      if(ev.key && ev.key.length === 1) buf += ev.key;
+    });
+  })();
 
   /* ================= manual ================= */
   btnManual.addEventListener("click", function(){
@@ -846,13 +969,69 @@
       return;
     }
     lastCode = "";
-    accept(v, manualFormat, null, true);
+    accept(v, manualFormat, null, true, null, false, "manual");
     $("manualCode").value = "";
   }
   $("manualGo").addEventListener("click", manualGo);
   $("manualCode").addEventListener("keydown", function(e){ if(e.key === "Enter") manualGo(); });
 
+  /* ================= rescue data left in this browser =================
+     Anything scanned before Supabase was configured lives in this
+     browser's storage only. Once the app switches to the shared
+     database that data becomes invisible — so offer to move it, once,
+     rather than leaving it stranded. */
+  function offerUpload(){
+    if(!store || store.mode !== "cloud") return;
+    var stash = Store.readStash();
+    var products = Object.keys(stash.catalog || {});
+    var n = (stash.scans || []).length + products.length;
+    if(!n) return;
+
+    $("migrate").hidden = false;
+    $("migrateText").textContent =
+      n + (n === 1 ? " record is" : " records are") + " saved in this browser only — " +
+      (stash.scans || []).length + " scan" + ((stash.scans || []).length === 1 ? "" : "s") +
+      " and " + products.length + " product" + (products.length === 1 ? "" : "s") + ".";
+
+    $("migrateGo").onclick = function(){
+      $("migrateGo").disabled = true;
+      $("migrateGo").textContent = "Envoi…";
+
+      // products first, so the scans land already named and priced
+      var jobs = products.map(function(code){
+        return store.setProduct(code, stash.catalog[code]);
+      });
+      Promise.all(jobs).then(function(){
+        return (stash.scans || []).reduce(function(chain, e){
+          return chain.then(function(){
+            if(!e || !e.code) return;
+            return store.addScan({
+              code: String(e.code), name: e.name || null, sku: e.sku || null,
+              brand: e.brand || null,
+              price: typeof e.price === "number" ? e.price : null,
+              at: e.at || new Date().toISOString(), format: e.format || ""
+            });
+          });
+        }, Promise.resolve());
+      }).then(function(){
+        Store.clearStash();               // only after everything landed
+        $("migrate").hidden = true;
+        say("<b>Envoyé.</b> " + n + " record" + (n === 1 ? "" : "s") +
+            " moved into Supabase — visible on every phone now.");
+      }).catch(function(err){
+        $("migrateGo").disabled = false;
+        $("migrateGo").textContent = "Réessayer";
+        say("<b>Upload incomplete</b> — " + esc(errText(err)) +
+            ". Nothing was deleted; your browser copy is intact.", true);
+      });
+    };
+
+    $("migrateSkip").onclick = function(){ $("migrate").hidden = true; };
+  }
+
   /* ================= start ================= */
+  // a gun used before means the shop scans with one: open ready for it
+  showGunReady(gunSeen());
   renderRecent();
   window.addEventListener("pagehide", stopCamera);
 
@@ -875,6 +1054,8 @@
           "deployed separately, so they share data only through Supabase — " +
           "fill in supabaseUrl and supabaseAnonKey in config.js.", true);
     }
+
+    offerUpload();
 
     if(res.fellBack){
       say("<b>Supabase unreachable</b> — " + esc(res.reason) + " Working on this device instead.", true);

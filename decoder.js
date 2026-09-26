@@ -50,7 +50,13 @@
   var RISKY  = ["ITF", "CODABAR"];
 
   var TARGET_PX    = 760;   // decode width; more than this buys nothing
-  var MAX_UPSCALE  = 2.2;   // lets the tight passes magnify
+  /* NEVER enlarge a crop before decoding. Upscaling invents pixels by
+     interpolation, and a decoder will happily read bar widths out of
+     invented detail — which is how a blurred 9311460226710 comes back
+     as 9001460226710 with a check digit that still adds up. Magnifying
+     a distant tag is the camera's job (the zoom buttons), not the
+     resampler's. */
+  var MAX_UPSCALE  = 1.0;
   var FRAME_BUDGET = 30;    // ms of decoding per frame
   var WIDEN_MS     = 3500;  // no read this long -> enable every format
   var HINT_MS      = 1600;
@@ -87,6 +93,8 @@
 
   function FastDecoder(video, opts){
     this.allowRisky = !!(opts && opts.risky);
+    /* auto | native | zbar | zxing | cross — see config.js */
+    this.enginePref = (opts && opts.engine) || "auto";
     this.video   = video;
     this.canvas  = document.createElement("canvas");
     this.ctx     = this.canvas.getContext("2d", { willReadFrequently: true });
@@ -102,7 +110,8 @@
     this.lastHitAt = 0; this.startedAt = 0; this.frames = 0;
     this.lastHintAt = 0; this.lastHint = ""; this.torchAuto = false;
     this.zoom = null; this.zoomCaps = null;
-    this.native = null; this.zxing = null; this.pending = null;
+    this.native = null; this.zbar = null; this.zxing = null; this.cross = false;
+    this.pending = null;
     this._probe = null; this._probeCtx = null; this._aim = null;
   }
 
@@ -110,6 +119,8 @@
 
   FastDecoder.prototype._setupNative = function(){
     var self = this;
+    var pref = this.enginePref;
+    if(pref === "zbar" || pref === "zxing") return Promise.resolve(false);
     if(!global.BarcodeDetector || !global.BarcodeDetector.getSupportedFormats){
       return Promise.resolve(false);
     }
@@ -120,6 +131,51 @@
       self.native = new global.BarcodeDetector({ formats: want });
       return true;
     }).catch(function(){ return false; });
+  };
+
+  /* ---------- zbar-wasm ----------
+     ZBar compiled to WebAssembly. Stronger than ZXing-JS on blurred,
+     low-contrast and partly damaged 1D codes, which is exactly the
+     iPhone case: Safari ships no BarcodeDetector, so without this the
+     fallback is the weakest engine of the three.
+
+     ZBar reports every symbology it knows, so results are filtered
+     against the enabled format list here — the trust gate downstream
+     still decides whether a read is believable. */
+  var ZBAR_FORMAT = {
+    ZBAR_EAN13: "EAN_13", ZBAR_ISBN13: "EAN_13",
+    ZBAR_EAN8: "EAN_8",
+    ZBAR_UPCA: "UPC_A", ZBAR_UPCE: "UPC_E", ZBAR_ISBN10: "UPC_A",
+    ZBAR_CODE128: "CODE_128", ZBAR_CODE39: "CODE_39",
+    ZBAR_I25: "ITF", ZBAR_CODABAR: "CODABAR",
+    ZBAR_QRCODE: "QR_CODE"
+  };
+
+  FastDecoder.prototype._setupZbar = function(){
+    if(this.enginePref === "native" || this.enginePref === "zxing") return false;
+    var z = global.zbarWasm;
+    if(!z || typeof z.scanImageData !== "function") return false;
+    this.zbar = z;
+    return true;
+  };
+
+  /* Run one canvas through zbar and return the first enabled format. */
+  FastDecoder.prototype._zbarRead = function(pass){
+    var self = this, c = this.canvas, img;
+    try{ img = this.ctx.getImageData(0, 0, c.width, c.height); }
+    catch(e){ return Promise.resolve(null); }
+
+    return this.zbar.scanImageData(img).then(function(symbols){
+      if(!symbols || !symbols.length) return null;
+      for(var i = 0; i < symbols.length; i++){
+        var s = symbols[i];
+        var fmt = ZBAR_FORMAT[s.typeName] || "";
+        if(!fmt || self.formats.indexOf(fmt) === -1) continue;
+        var text = s.decode();
+        if(text) return { text: text, format: fmt, box: mapBox(pass, c, pointsBox(s.points)) };
+      }
+      return null;
+    }).catch(function(){ return null; });
   };
 
   FastDecoder.prototype._setupZxing = function(){
@@ -149,9 +205,13 @@
     if(this.widened) return Promise.resolve();
     this.widened = true;
     this.formats = RETAIL.concat(EXTRA).concat(this.allowRisky ? RISKY : []);
-    this.native = null; this.zxing = null;
+    this.native = null; this.zxing = null; this.zbar = null;
     var self = this;
-    return this._setupNative().then(function(){ self._setupZxing(); });
+    return this._setupNative().then(function(native){
+      if(native) return;
+      if(self._setupZbar()) return;      // zbar needs no format rebuild
+      self._setupZxing();
+    });
   };
 
   /* ---------- draw one window of the frame ---------- */
@@ -246,6 +306,31 @@
 
   FastDecoder.prototype._decode = function(pass){
     var self = this;
+
+    /* CROSS mode: two unrelated decoders must read the same number.
+       A false read comes from one engine's particular weakness, so the
+       other almost never invents the identical mistake — this is the
+       strongest defence against wrong numbers that exists here, at
+       roughly half the scan rate. */
+    if(this.cross){
+      return this.native.detect(this.canvas).then(function(res){
+        if(!res || !res.length) return null;
+        var r0 = res[0];
+        var bb = r0.boundingBox;
+        var mine = {
+          text: r0.rawValue,
+          format: (r0.format || "").toUpperCase(),
+          box: mapBox(pass, self.canvas,
+                      bb ? { x: bb.x, y: bb.y, w: bb.width, h: bb.height }
+                         : pointsBox(r0.cornerPoints))
+        };
+        return self._zbarRead(pass).then(function(other){
+          if(!other || other.text !== mine.text) return null;   // no agreement
+          return mine;
+        });
+      }).catch(function(){ return null; });
+    }
+
     if(this.native){
       return this.native.detect(this.canvas).then(function(res){
         if(res && res.length){
@@ -262,6 +347,10 @@
         return null;
       }).catch(function(){ return null; });
     }
+    if(this.zbar){
+      return this._zbarRead(pass);
+    }
+
     if(this.zxing){
       var Z = global.ZXing;
       try{
@@ -623,7 +712,10 @@
      run of alternating bars can satisfy it. */
   var CONFIRMATIONS = {
     EAN_13: 3, EAN_8: 3, UPC_A: 3, UPC_E: 3,
-    CODE_128: 3, CODE_39: 3, CODABAR: 3, ITF: 3
+    CODE_128: 3,        // require repeated, identical reads even with its internal checksum
+    CODE_39: 3,
+    CODABAR: 3,
+    ITF: 3
   };
   var CONFIRM_WINDOW = 2200;   // ms: corroborating reads must be close together
 
@@ -667,16 +759,34 @@
       return false;
     }
 
+    /* Repeated reads are not enough on their own: a blurred tag can be
+       misread the SAME wrong way frame after frame, and EAN's check
+       digit does not catch it (9311460226710 misread as 9001460226710
+       still adds up). So the corroborating reads must also come from
+       at least two DIFFERENT windows of the scan plan. A real barcode
+       decodes from several crops; a false read is usually an artefact
+       of one particular crop and does not survive being reframed. */
     var need = CONFIRMATIONS[f] || 2;
+    var pass = (typeof hit.pass === "number") ? hit.pass : -1;
+
     if(this.pending && this.pending.text === hit.text &&
        now - this.pending.at < CONFIRM_WINDOW){
       this.pending.count++;
       this.pending.at = now;
-      if(this.pending.count >= need){ this.pending = null; return true; }
+      if(pass >= 0 && this.pending.passes.indexOf(pass) === -1){
+        this.pending.passes.push(pass);
+      }
+      var wideEnough = pass < 0 || this.pending.passes.length >= 2;
+      if(this.pending.count >= need && wideEnough){
+        this.pending = null;
+        return true;
+      }
       return false;
     }
-    this.pending = { text: hit.text, count: 1, at: now };
-    return need <= 1;
+
+    this.pending = { text: hit.text, count: 1, at: now,
+                     passes: pass >= 0 ? [pass] : [] };
+    return need <= 1 && pass < 0;
   };
 
   /* ---------- the loop ---------- */
@@ -716,6 +826,7 @@
     return this._decode(p).then(function(hit){
       if(hit){
         self.bestPass = idx;
+        hit.pass = idx;          // which window produced it — see _confirm
         if(!hit.box) hit.box = { x: p.x, y: p.y, w: p.w, h: p.h, approx: true };
         return hit;
       }
@@ -730,8 +841,13 @@
 
     var self = this;
     this.frames++;
-    // start each frame on the window that worked last time
-    if(performance.now() - this.lastHitAt < 4000) this.cursor = this.bestPass;
+    /* Start each frame on the window that worked last time — but NOT
+       while a read is waiting for corroboration. Pinning there would
+       feed every confirmation from the same crop, and the whole point
+       of the distinct-window rule is that a second crop has to agree. */
+    if(!this.pending && performance.now() - this.lastHitAt < 4000){
+      this.cursor = this.bestPass;
+    }
 
     this._sweep(performance.now(), 0).then(function(hit){
       if(!self.running) return;
@@ -780,12 +896,26 @@
       self._aimAt(self._busiestSpot(), true);
     }, 800);
 
+    /* Engine order, strongest first:
+         1. the phone's own BarcodeDetector (Android = ML Kit)
+         2. zbar-wasm   (iOS Safari lands here)
+         3. ZXing       (only if zbar did not load) */
     return this._setupNative().then(function(native){
-      if(!native) self._setupZxing();
-      if(!self.native && !self.zxing) throw new Error("no decoder available");
+      if(self.enginePref === "cross"){
+        // both must be present, or cross-checking is meaningless
+        var haveZbar = self._setupZbar();
+        if(native && haveZbar){ self.cross = true; }
+        else if(!native && !haveZbar) self._setupZxing();
+      } else {
+        if(!native && !self._setupZbar()) self._setupZxing();
+      }
+      if(!self.native && !self.zbar && !self.zxing){
+        throw new Error("no decoder available");
+      }
       self.running = true;
       self._schedule();
-      return self.native ? "native" : "zxing";
+      if(self.cross) return "cross";
+      return self.native ? "native" : (self.zbar ? "zbar" : "zxing");
     });
   };
 
