@@ -17,8 +17,16 @@
   <header class="bar">
     <div class="mark">Pyjama&nbsp;Dz <small>scanner</small></div>
     <div class="spacer"></div>
+    <span class="modeChip" id="inputMode" hidden>Douchette</span>
     <span class="sync" id="sync" data-s="wait"><i></i><span id="syncLabel">starting</span></span>
   </header>
+
+  <!-- Two ways in. The gun needs no camera, no permission and no aiming,
+       so it is shown as an equal path rather than a hidden extra. -->
+  <div class="gunReady" id="gunReady" hidden>
+    <span class="gunReady-dot"></span>
+    <span><b>Douchette prête.</b> Tirez sur l'étiquette — la caméra n'est pas nécessaire.</span>
+  </div>
 
   <div class="scope" id="scope" data-state="idle">
     <video id="video" playsinline muted autoplay hidden></video>
@@ -73,6 +81,22 @@
   </div>
 
   <p class="status" id="status"><b>Ready.</b> Camera scanning needs a moment of permission the first time.</p>
+
+  <!-- Anything scanned before Supabase was configured sits in this
+       browser only. Without this bar it is invisible and unreachable. -->
+  <div class="notice" id="migrate" hidden>
+    <span id="migrateText"></span>
+    <button class="tiny primary" id="migrateGo">Envoyer vers Supabase</button>
+    <button class="tiny ghost" id="migrateSkip">Plus tard</button>
+  </div>
+
+  <!-- A first-ever code that is nearly one you scan constantly is almost
+       always a misread. It is held here instead of being written. -->
+  <div class="notice" id="suspect" hidden>
+    <span id="suspectText"></span>
+    <button class="tiny primary" id="suspectDrop">Ignorer</button>
+    <button class="tiny ghost" id="suspectKeep">C'est un vrai code</button>
+  </div>
 
   <div class="panel" id="manualPanel" hidden>
     <h3>Enter the number under the bars</h3>
@@ -149,11 +173,19 @@
   </div>
 
   <footer>
-    EAN-13 / EAN-8 / UPC / CODE-128 / CODE-39 / ITF<br>
+    EAN-13 / EAN-8 / UPC / CODE-128 / CODE-39<br>
+    Douchette USB ou Bluetooth : branchez-la, elle marche sans réglage.<br>
     <span id="footNote">Starting up…</span>
   </footer>
 </div>
 
+<!-- Decoding engines, strongest first. The phone's own BarcodeDetector is
+     used when it exists (Android = ML Kit) and neither of these is touched.
+     zbar-wasm is the iPhone path: Safari has no BarcodeDetector at all.
+     The "inlined" build embeds the 233 KB wasm, so there is no second
+     request that could fail or be blocked by a host. ZXing stays as a last
+     resort in case zbar does not load. -->
+<script src="https://cdn.jsdelivr.net/npm/@undecaf/zbar-wasm@0.11.0/dist/inlined/index.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 

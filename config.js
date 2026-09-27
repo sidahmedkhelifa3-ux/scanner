@@ -75,5 +75,10 @@ window.PYJAMADZ_CONFIG = {
      The engine actually in use is shown when the camera starts, so
      you can tell which one produced a bad read.
      ---------------------------------------------------------------- */
-  engine: "cross"
+  /* "auto" — measured 4-6x faster than "cross" on real (imperfect)
+     frames, because cross needs BOTH decoders to succeed on the SAME
+     pass and that gets rarer as the picture gets worse. Accuracy now
+     comes from the gun and from the misread hold, which cost nothing.
+     Switch to "cross" only if wrong numbers come back. */
+  engine: "auto"
 };

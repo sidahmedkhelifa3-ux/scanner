@@ -711,11 +711,15 @@
      identically before they count. ITF is the worst offender: any
      run of alternating bars can satisfy it. */
   var CONFIRMATIONS = {
-    EAN_13: 3, EAN_8: 3, UPC_A: 3, UPC_E: 3,
-    CODE_128: 3,        // require repeated, identical reads even with its internal checksum
-    CODE_39: 3,
+    /* EAN/UPC carry a check digit, AND a read must come from two
+       different windows of the sweep, AND a never-seen code close to an
+       established one is held for confirmation. Three layers already —
+       demanding a third identical read only slowed scanning down. */
+    EAN_13: 2, EAN_8: 2, UPC_A: 2, UPC_E: 2,
+    CODE_128: 2,        // has an internal checksum
+    CODE_39: 3,         // no usable check digit
     CODABAR: 3,
-    ITF: 3
+    ITF: 3              // decodes noise readily
   };
   var CONFIRM_WINDOW = 2200;   // ms: corroborating reads must be close together
 
