@@ -265,8 +265,46 @@
     return best ? { near: best, dist: bestDist, seen: counts[best] } : null;
   }
 
+  /* ---------- bulk import ----------
+     A supplier list pasted from Excel arrives tab-separated; a CSV
+     arrives comma- or semicolon-separated (Excel in French locales uses
+     semicolons). Accept all three, skip a header row, and report what
+     could not be read rather than importing it wrongly. */
+  function parseImport(text){
+    var rows = [], bad = [];
+    var lines = String(text || "").split(/\r?\n/);
+
+    for(var i = 0; i < lines.length; i++){
+      var raw = lines[i].trim();
+      if(!raw) continue;
+
+      var parts = raw.split(/\t|;|,/).map(function(s){ return s.trim(); });
+      var code = (parts[0] || "").replace(/["']/g, "");
+
+      // a header row names its columns instead of holding a barcode
+      if(/^(code|barcode|code[-_ ]?barres?|ean|upc)$/i.test(code)) continue;
+      if(!/^\d{6,14}$/.test(code)){
+        bad.push({ line: i + 1, text: raw, why: "no barcode in the first column" });
+        continue;
+      }
+
+      var ref = (parts[1] || "").replace(/["']/g, "").trim();
+      var priceRaw = (parts[2] || "").replace(/[^\d.,]/g, "").replace(",", ".");
+      var price = priceRaw === "" ? null : Number(priceRaw);
+      if(price !== null && (!isFinite(price) || price < 0)) price = null;
+      var name = (parts[3] || "").replace(/["']/g, "").trim();
+
+      if(!ref && !name){
+        bad.push({ line: i + 1, text: raw, why: "no reference and no name" });
+        continue;
+      }
+      rows.push({ code: code, sku: ref || name, name: name || ref, price: price });
+    }
+    return { rows: rows, bad: bad };
+  }
+
   global.PDZ = {
-    appUrl: appUrl, isSplit: isSplit,
+    appUrl: appUrl, isSplit: isSplit, parseImport: parseImport,
     editDistance: editDistance, nearDuplicate: nearDuplicate,
     pointInImage: pointInImage, snapToBox: snapToBox,
     esc: esc, money: money, clock: clock, stamp: stamp,

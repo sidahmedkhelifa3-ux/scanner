@@ -49,7 +49,16 @@
   var EXTRA  = ["CODE_128", "CODE_39"];
   var RISKY  = ["ITF", "CODABAR"];
 
-  var TARGET_PX    = 760;   // decode width; more than this buys nothing
+  /* Decode width. 760 was too mean: the centre band is ~1613 source
+     pixels wide, so it was halved before decoding. EAN-13 is 95 modules
+     and wants ~3 pixels per module to read reliably — about 285 px for
+     the barcode ALONE. A tag filling a quarter of the band therefore
+     needs the band at ~1140 px, and at 760 it simply failed to decode,
+     over and over. Failed attempts are what "slow" actually is, so the
+     primary window now keeps its detail and the outer windows, which
+     only exist to catch a stray tag, stay cheap. */
+  var TARGET_PX    = 900;   // default for the outer windows
+  var TARGET_MAIN  = 1400;  // the centre band and whole frame
   /* NEVER enlarge a crop before decoding. Upscaling invents pixels by
      interpolation, and a decoder will happily read bar widths out of
      invented detail — which is how a blurred 9311460226710 comes back
@@ -68,12 +77,13 @@
      most-likely first, magnified and exotic last. */
   function buildPlan(){
     var P = [];
-    // 1. the centre band — a tag held up to the camera
-    P.push({ x:0.08, y:0.30, w:0.84, h:0.40, rot:0,  tag:"centre" });
-    P.push({ x:0.08, y:0.30, w:0.84, h:0.40, rot:90, tag:"centre ⟲" });
+    // 1. the centre band — a tag held up to the camera. This is where
+    //    the code almost always is, so it gets the pixels.
+    P.push({ x:0.08, y:0.30, w:0.84, h:0.40, rot:0,  target:TARGET_MAIN, tag:"centre" });
+    P.push({ x:0.08, y:0.30, w:0.84, h:0.40, rot:90, target:TARGET_MAIN, tag:"centre ⟲" });
     // 2. the whole frame — a tag anywhere, if it is big enough
-    P.push({ x:0.00, y:0.00, w:1.00, h:1.00, rot:0,  tag:"frame" });
-    P.push({ x:0.00, y:0.00, w:1.00, h:1.00, rot:90, tag:"frame ⟲" });
+    P.push({ x:0.00, y:0.00, w:1.00, h:1.00, rot:0,  target:TARGET_MAIN, tag:"frame" });
+    P.push({ x:0.00, y:0.00, w:1.00, h:1.00, rot:90, target:TARGET_MAIN, tag:"frame ⟲" });
     // 3. four overlapping quadrants at ~2x — a small tag off to one side
     var q = 0.56, step = 1 - q;
     for(var gy = 0; gy < 2; gy++){
@@ -225,7 +235,7 @@
     var sx = Math.round(vw * p.x);
     var sy = Math.round(vh * p.y);
 
-    var scale = Math.min(MAX_UPSCALE, TARGET_PX / sw);
+    var scale = Math.min(MAX_UPSCALE, (p.target || TARGET_PX) / sw);
     var dw = Math.max(80, Math.round(sw * scale));
     var dh = Math.max(40, Math.round(sh * scale));
 
@@ -723,6 +733,11 @@
   };
   var CONFIRM_WINDOW = 2200;   // ms: corroborating reads must be close together
 
+  /* Symbologies with no usable check digit. For these, and only these,
+     the corroborating reads must come from two different windows —
+     there is nothing else to test them against. */
+  var NEEDS_DISTINCT = { CODE_39: 1, CODABAR: 1, ITF: 1 };
+
   /* Shapes a real code of that symbology can actually take. */
   function plausible(text, format){
     var f = (format || "").toUpperCase();
@@ -763,14 +778,18 @@
       return false;
     }
 
-    /* Repeated reads are not enough on their own: a blurred tag can be
-       misread the SAME wrong way frame after frame, and EAN's check
-       digit does not catch it (9311460226710 misread as 9001460226710
-       still adds up). So the corroborating reads must also come from
-       at least two DIFFERENT windows of the scan plan. A real barcode
-       decodes from several crops; a false read is usually an artefact
-       of one particular crop and does not survive being reframed. */
+    /* Corroboration from two DIFFERENT windows is a strong signal, but
+       it cannot be a requirement: a tag held in the middle is often
+       readable in the centre crop and nowhere else — the whole-frame
+       window downscales it past legibility — so demanding a second
+       window meant such a tag was NEVER accepted. Measured: "only the
+       centre window can read it" never acquired in 5 seconds.
+
+       So it is required only where there is no check digit to lean on.
+       EAN/UPC have one, plus the misread hold catches the valid-digit
+       misreads that slip through, and neither costs any latency. */
     var need = CONFIRMATIONS[f] || 2;
+    var needDistinct = !!NEEDS_DISTINCT[f];
     var pass = (typeof hit.pass === "number") ? hit.pass : -1;
 
     if(this.pending && this.pending.text === hit.text &&
@@ -780,7 +799,7 @@
       if(pass >= 0 && this.pending.passes.indexOf(pass) === -1){
         this.pending.passes.push(pass);
       }
-      var wideEnough = pass < 0 || this.pending.passes.length >= 2;
+      var wideEnough = !needDistinct || pass < 0 || this.pending.passes.length >= 2;
       if(this.pending.count >= need && wideEnough){
         this.pending = null;
         return true;
@@ -788,9 +807,9 @@
       return false;
     }
 
-    this.pending = { text: hit.text, count: 1, at: now,
+    this.pending = { text: hit.text, count: 1, at: now, needDistinct: needDistinct,
                      passes: pass >= 0 ? [pass] : [] };
-    return need <= 1 && pass < 0;
+    return need <= 1 && !needDistinct;
   };
 
   /* ---------- the loop ---------- */
@@ -845,11 +864,14 @@
 
     var self = this;
     this.frames++;
-    /* Start each frame on the window that worked last time — but NOT
-       while a read is waiting for corroboration. Pinning there would
-       feed every confirmation from the same crop, and the whole point
-       of the distinct-window rule is that a second crop has to agree. */
-    if(!this.pending && performance.now() - this.lastHitAt < 4000){
+    /* Start each frame on the window that worked last time. This is the
+       single biggest speed win: the tag usually stays where it was, so
+       re-trying that crop first acquires in one attempt instead of
+       sweeping the plan. Only a read that still needs corroboration
+       from a DIFFERENT window is allowed to move the cursor on. */
+    var holdingOut = this.pending && this.pending.needDistinct &&
+                     this.pending.passes.length < 2;
+    if(!holdingOut && performance.now() - this.lastHitAt < 4000){
       this.cursor = this.bestPass;
     }
 

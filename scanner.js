@@ -157,6 +157,7 @@
      it finds as a suggestion the user checks before saving. */
 
   var lastStill = null;      // the photo, when a photo was scanned
+  var lastStillCode = null;  // and which code was decoded out of it
   var ocrDoneFor = {};       // one automatic attempt per code
 
   /* The frame captured at the instant the barcode was decoded. Grabbing
@@ -178,7 +179,11 @@
       var c = decoder.capture(1400, (current && current.box) || null);
       if(c) return c;
     }
-    return lastStill;
+    /* A stored photo belongs to the tag it was taken of. Reusing it for
+       a later gun or typed scan would read a DIFFERENT tag's label and
+       attach its reference to this product. */
+    if(lastStill && current && lastStillCode === current.code) return lastStill;
+    return null;
   }
 
   /* The barcode box expressed in the CROP's coordinate space, so the
@@ -219,7 +224,15 @@
     }
     var src = ocrSource();
     if(!src){
-      $("ocrNote").textContent = auto ? "" : "start the camera or scan a photo first, then read the tag";
+      /* A gun sends only the number — there is no picture to read the
+         printed reference from. Say so plainly instead of leaving the
+         "reading the tag…" message hanging forever. */
+      $("ocrNote").textContent =
+        "no picture to read — start the camera, or type the reference below";
+      if(auto){
+        say("<b>" + esc(current.code) + "</b> enregistré. La référence ne peut pas " +
+            "être lue sans image — tapez-la, ou utilisez la caméra.", true);
+      }
       return;
     }
 
@@ -386,8 +399,10 @@
       $("newSave").disabled = false;
       ["newBrand","newName","newSku","newNameAr","newPrice"].forEach(function(id){ $(id).value = ""; });
       renderTicket(code, "", "saved");
-      say("<b>Saved.</b> " + esc(rec.sku) + " is priced from now on" +
-          (mode === "cloud" ? " — on every phone." : "."));
+      // let go of the keyboard, or the next trigger pull types into the form
+      releaseKeyboard();
+      say("<b>" + esc(rec.sku) + " enregistré.</b> Scannez le suivant." +
+          (mode === "cloud" ? "" : " (ce téléphone seulement)"));
     }).catch(function(err){
       $("newSave").disabled = false;
       say("<b>Could not save</b> — " + esc(errText(err)), true);
@@ -529,11 +544,17 @@
       say("✨ <b>" + esc(brandPrefix + (ocrPreload.sku || ocrPreload.name || code)) + "</b>" +
           (ocrPreload.price != null ? " · " + money(ocrPreload.price) + " DA" : "") +
           " read from the tag. <em>Tap Save to keep it.</em>");
-    } else if(!ocrDoneFor[code]){
+    } else if(!ocrDoneFor[code] && (running || lastStillCode === code)){
+      // only promise to read the label when there IS a picture: a gun
+      // scan has none, and the camera may simply be off
       ocrDoneFor[code] = true;
       grabShot(code, pendingBox);          // crop the label around the bars
-      say("<b>" + esc(code) + "</b> — reading the name on the tag…");
+      say("<b>" + esc(code) + "</b> — reading the reference on the tag…");
       setTimeout(function(){ readTag(true); }, 60);
+    } else if(!running && lastStillCode !== code){
+      say("<b>" + esc(code) + "</b> — tapez la référence, <em>Entrée</em>, le prix, " +
+          "<em>Entrée</em>. Puis scannez le suivant.");
+      beginTyping();
     } else {
       say("<b>" + esc(code) + "</b> is on the list. Give it a name so it reads properly.");
     }
@@ -879,11 +900,14 @@
       if(hit && hit.text){
         if(global_TagOCR()){
           TagOCR.read(img, hit.text).then(function(ocrRes){
+            lastStillCode = hit.text;
             accept(hit.text, hit.format, hit.box || null, false, ocrRes, false, "photo");
           }).catch(function(){
+            lastStillCode = hit.text;
             accept(hit.text, hit.format, hit.box || null, false, null, false, "photo");
           });
         } else {
+          lastStillCode = hit.text;
           accept(hit.text, hit.format, hit.box || null, false, null, false, "photo");
         }
       } else {
@@ -893,6 +917,47 @@
       say("<b>Photo decoding failed</b> — " + esc(errText(err)) + ". Use <em>Type code</em>.", true);
     });
   }
+
+  /* ================= fast keyboard entry =================
+     A gun gives the number but not the printed reference, so for a new
+     product that has to be typed. Made into a rhythm you can run
+     without looking: scan, type ref, Enter, type price, Enter, scan.
+
+     The wedge below ignores keystrokes while a field has focus, so the
+     field is released the moment the product is saved — otherwise the
+     next trigger pull would type into the form. */
+  function beginTyping(){
+    var ref = $("newSku");
+    if(!ref || $("tUnknown").hidden) return;
+    ref.focus();
+    if(ref.select) ref.select();
+  }
+
+  function releaseKeyboard(){
+    var a = document.activeElement;
+    if(a && a.blur) a.blur();
+  }
+
+  (function entryChain(){
+    var ref = $("newSku"), price = $("newPrice"), save = $("newSave");
+
+    if(ref) ref.addEventListener("keydown", function(e){
+      if(e.key === "Enter"){ e.preventDefault(); if(price) price.focus(); }
+      if(e.key === "Escape"){ releaseKeyboard(); }      // hand the gun back
+    });
+
+    if(price) price.addEventListener("keydown", function(e){
+      if(e.key === "Enter"){ e.preventDefault(); if(save) save.click(); }
+      if(e.key === "Escape"){ releaseKeyboard(); }
+    });
+
+    [$("newBrand"), $("newName"), $("newNameAr")].forEach(function(f){
+      if(f) f.addEventListener("keydown", function(e){
+        if(e.key === "Enter"){ e.preventDefault(); if(save) save.click(); }
+        if(e.key === "Escape"){ releaseKeyboard(); }
+      });
+    });
+  })();
 
   /* ================= hardware scanner (keyboard wedge) =================
      A USB or Bluetooth barcode gun presents itself to the phone or PC
