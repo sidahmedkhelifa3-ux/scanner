@@ -80,5 +80,12 @@ window.PYJAMADZ_CONFIG = {
      pass and that gets rarer as the picture gets worse. Accuracy now
      comes from the gun and from the misread hold, which cost nothing.
      Switch to "cross" only if wrong numbers come back. */
-  engine: "auto"
+  engine: "auto",
+
+  /* The camera opens zoomed in by this much, ONCE, then never changes
+     by itself. Phone cameras cannot focus closer than ~10-15 cm, so
+     starting at 2x makes you hold the phone back where focus works,
+     instead of pushing it up against the tag where it cannot. Tap 1x
+     on the picture to go back. Set to 1 to open unzoomed. */
+  startZoom: 2
 };

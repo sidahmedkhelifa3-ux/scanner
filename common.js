@@ -303,8 +303,46 @@
     return { rows: rows, bad: bad };
   }
 
+  /* ---------- choosing the lens ----------
+     A phone has several back cameras, and a web page asking for "the
+     back camera" gets whichever one the phone offers — often the
+     ultra-wide or the telephoto, and neither can focus on a tag held
+     close. That is the classic scanner that hunts and hunts. The MAIN
+     lens is the one to use; this ranks the cameras by their labels.
+     Labels are only readable once camera permission is granted. */
+  function lensScore(label){
+    var l = String(label || "").toLowerCase();
+    if(/front|user|selfie|facetime|avant|frontale/.test(l)) return -1000;
+    var s = 0;
+    if(/back|rear|environment|arri[eè]re/.test(l)) s += 20;
+    if(/ultra|0[.,]5x?|grand[- ]angle/.test(l)) s -= 40;     // soft at close range
+    if(/tele|t[ée]l[ée]objectif|\b[23]x\b/.test(l)) s -= 30; // long minimum focus
+    if(/depth|infrared|\bir\b|\btof\b|macro|mono/.test(l)) s -= 50;
+    if(/dual|triple/.test(l)) s -= 10;                       // iOS virtual multi-camera
+    var m = l.match(/camera2?\s*(\d+)/);                     // Android "camera2 0, facing back"
+    if(m) s += (m[1] === "0" ? 15 : -Number(m[1]));
+    if(/^back camera$/.test(l.trim())) s += 25;              // iPhone's main wide lens
+    return s;
+  }
+
+  /* devices: from navigator.mediaDevices.enumerateDevices(). Returns the
+     back cameras, best first: [{deviceId, label, score}]. */
+  function rankCameras(devices){
+    var out = [];
+    for(var i = 0; i < (devices || []).length; i++){
+      var d = devices[i];
+      if(!d || d.kind !== "videoinput") continue;
+      var sc = lensScore(d.label);
+      if(sc <= -1000) continue;
+      out.push({ deviceId: d.deviceId, label: d.label || "", score: sc, order: i });
+    }
+    out.sort(function(a, b){ return (b.score - a.score) || (a.order - b.order); });
+    return out;
+  }
+
   global.PDZ = {
     appUrl: appUrl, isSplit: isSplit, parseImport: parseImport,
+    rankCameras: rankCameras, lensScore: lensScore,
     editDistance: editDistance, nearDuplicate: nearDuplicate,
     pointInImage: pointInImage, snapToBox: snapToBox,
     esc: esc, money: money, clock: clock, stamp: stamp,

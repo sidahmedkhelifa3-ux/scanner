@@ -582,7 +582,7 @@
      cannot meet makes getUserMedia fail outright or drop into an odd
      mode. If the preferred request is refused, fall back to plainer
      ones rather than giving up. */
-  function openCamera(){
+  function openCamera(deviceId){
     var attempts = [
       { video: { facingMode: { ideal: "environment" },
                  width:  { ideal: 1920 },
@@ -590,6 +590,12 @@
       { video: { facingMode: { ideal: "environment" } }, audio: false },
       { video: true, audio: false }
     ];
+    // a specific lens first, when we know which one works
+    if(deviceId){
+      attempts.unshift({ video: { deviceId: { exact: deviceId },
+                                  width:  { ideal: 1920 },
+                                  height: { ideal: 1080 } }, audio: false });
+    }
     var i = 0;
     function attempt(lastErr){
       if(i >= attempts.length) return Promise.reject(lastErr || new Error("no camera"));
@@ -602,6 +608,110 @@
       });
     }
     return attempt(null);
+  }
+
+  /* ---------- the right lens ----------
+     "The back camera" is often the ultra-wide or the telephoto, which
+     cannot focus on a tag held close — the scanner then hunts forever.
+     So: open, read the lens labels (only possible once permission is
+     granted), and switch to the main lens before scanning starts. The
+     lens that actually reads a barcode is remembered, so next time the
+     camera opens straight on it. */
+  var LENS_KEY = "pyjamadz.lens";
+  var lenses = [];                     // ranked back cameras, best first
+
+  function rememberedLens(){
+    try{ return localStorage.getItem(LENS_KEY) || null; }catch(e){ return null; }
+  }
+  function rememberLens(id){
+    if(!id) return;
+    try{ localStorage.setItem(LENS_KEY, id); }catch(e){}
+  }
+  function forgetLens(){
+    try{ localStorage.removeItem(LENS_KEY); }catch(e){}
+  }
+  function deviceIdOf(s){
+    try{
+      var t = s.getVideoTracks()[0];
+      var st = t && t.getSettings ? t.getSettings() : {};
+      return st.deviceId || null;
+    }catch(e){ return null; }
+  }
+  function stopStream(s){
+    try{ s.getTracks().forEach(function(t){ try{ t.stop(); }catch(e){} }); }catch(e){}
+  }
+
+  function openBestCamera(){
+    var wanted = rememberedLens();
+    return openCamera(wanted).then(function(s){
+      // the remembered lens is gone (another phone, a changed device):
+      // forget it and choose again rather than trusting a stale id
+      var got = deviceIdOf(s);
+      if(wanted && got && got !== wanted){ forgetLens(); wanted = null; }
+      var md = navigator.mediaDevices;
+      if(!md.enumerateDevices) return s;
+      return md.enumerateDevices().then(function(devs){
+        lenses = PDZ.rankCameras(devs);
+        refreshLensButton();
+        if(wanted || lenses.length < 2) return s;        // trust a lens that worked before
+
+        var cur = deviceIdOf(s), best = lenses[0], curScore = null;
+        for(var i = 0; i < lenses.length; i++){
+          if(lenses[i].deviceId === cur) curScore = lenses[i].score;
+        }
+        if(!best.deviceId || best.deviceId === cur) return s;
+        if(curScore !== null && curScore >= best.score) return s;
+
+        // the phone handed us a worse lens: swap to the main one
+        stopStream(s);
+        return openCamera(best.deviceId).catch(function(){ return openCamera(null); });
+      }).catch(function(){ return s; });
+    });
+  }
+
+  /* Manual override: step to the next back camera. */
+  function refreshLensButton(){
+    var b = $("btnLens");
+    if(b) b.hidden = lenses.length < 2;
+    refreshCamBar();
+  }
+
+  function nextLens(){
+    if(lenses.length < 2) return;
+    var cur = deviceIdOf(stream), idx = -1;
+    for(var i = 0; i < lenses.length; i++){ if(lenses[i].deviceId === cur) idx = i; }
+    var next = lenses[(idx + 1) % lenses.length];
+    rememberLens(next.deviceId);
+    stopCamera();
+    startCamera();
+    say("<b>Objectif changé</b>" + (next.label ? " — " + esc(next.label) : "") + ".");
+  }
+
+  function refreshCamBar(){
+    var bar = $("camBar");
+    if(!bar) return;
+    var anyShown = (btnTorch && !btnTorch.hidden) || ($("btnLens") && !$("btnLens").hidden);
+    bar.hidden = !(running && anyShown);
+  }
+
+  /* Once, when the camera opens: start zoomed in, so the phone is held
+     back at a distance where it CAN focus, instead of pushed up to the
+     tag where it cannot. On most phones this zoom crops the full sensor,
+     so it adds real detail. Nothing changes it after that but you. */
+  function applyStartZoom(){
+    var want = Number((window.PYJAMADZ_CONFIG || {}).startZoom) || 1;
+    if(!decoder || want <= 1) return;
+    var caps = decoder.zoomRange();
+    if(!caps) return;
+    decoder.setZoom(Math.min(caps.max, caps.min * want));
+  }
+
+  if($("btnLens")) $("btnLens").addEventListener("click", nextLens);
+
+  /* A read from the camera proves this lens works: keep it. */
+  function onCameraHit(text, format, box){
+    rememberLens(deviceIdOf(stream));
+    accept(text, format, box);
   }
 
   /* Show the whole picture the camera gives, at its own shape. The box
@@ -622,7 +732,7 @@
     }
     say("<b>Opening the camera…</b> allow access when your browser asks.");
 
-    openCamera().then(function(s){
+    openBestCamera().then(function(s){
       stream = s; video.srcObject = s;
       video.hidden = false; idle.hidden = true;
       scope.setAttribute("data-state","live");
@@ -637,8 +747,10 @@
       decoder = FastDecoder.create(video, {
         engine: (window.PYJAMADZ_CONFIG || {}).engine
       });
-      return decoder.start(stream, accept, onCoach, onAutoTorch, onZoom);
+      return decoder.start(stream, onCameraHit, onCoach, onAutoTorch, onZoom);
     }).then(function(engine){
+      applyStartZoom();
+      refreshCamBar();
       // Name the decoder in use, so a wrong read can be blamed on the
       // right thing rather than guessed at.
       var named = {
@@ -664,7 +776,8 @@
   function onCoach(msg){ say("<b>" + esc(msg) + "</b>"); }
 
   function onAutoTorch(on){
-    $("camBar").hidden = false;
+    btnTorch.hidden = false;
+    refreshCamBar();
     paintTorch(on);
   }
 
@@ -784,7 +897,8 @@
     return track.applyConstraints({ advanced: [{ torch: !!on }] })
       .then(function(){ paintTorch(on); return true; })
       .catch(function(){
-        $("camBar").hidden = true;          // the camera lied about torch
+        btnTorch.hidden = true;             // the camera lied about torch
+        refreshCamBar();
         return false;
       });
   }
@@ -793,9 +907,10 @@
     try{
       var track = stream.getVideoTracks()[0];
       var caps = track && track.getCapabilities ? track.getCapabilities() : {};
-      if(!caps || !caps.torch){ $("camBar").hidden = true; return; }
+      if(!caps || !caps.torch){ btnTorch.hidden = true; refreshCamBar(); return; }
 
-      $("camBar").hidden = false;
+      btnTorch.hidden = false;
+      refreshCamBar();
       paintTorch(false);
 
       btnTorch.onclick = function(){

@@ -494,7 +494,10 @@
     var msg = null;
     if(q.luma < DARK_LUMA)      msg = "Too dark to read the bars.";
     else if(q.luma > 232)       msg = "Glare on the tag — tilt it away from the light.";
-    else if(q.edge < FLAT_EDGE) msg = "Bars look blurred — the tag may be too far to resolve. Move closer.";
+    /* Blur almost always means TOO CLOSE: phone cameras cannot focus
+       nearer than ~10-15 cm. This used to say "move closer", which sent
+       people exactly the wrong way — straight into the blur. */
+    else if(q.edge < FLAT_EDGE) msg = "Flou — reculez à environ 20 cm et tenez immobile.";
     else if(q.luma < DIM_LUMA)  msg = "A bit dim. More light would speed this up.";
     if(msg && msg !== this.lastHint){
       this.lastHint = msg; this.lastHintAt = now;
@@ -812,6 +815,38 @@
     return need <= 1 && !needDistinct;
   };
 
+  /* ---------- the fast path ----------
+     The phone's own BarcodeDetector accepts a <video> element directly.
+     Handing it the video skips everything the windowed sweep has to do
+     per attempt: resize a canvas, drawImage, and (for the JS decoders)
+     copy a few megabytes out with getImageData. The browser reads the
+     frame on its own pipeline instead.
+
+     So on a phone that has one, try the whole frame natively FIRST
+     every frame. It resolves the common case — a tag held up to the
+     camera — in a single cheap call, and the windowed sweep is left as
+     the fallback for tags it misses. */
+  FastDecoder.prototype._directRead = function(){
+    var self = this, v = this.video;
+    if(!this.native || this.cross) return Promise.resolve(null);
+    return this.native.detect(v).then(function(res){
+      if(!res || !res.length) return null;
+      var r0 = res[0];
+      var vw = v.videoWidth, vh = v.videoHeight;
+      var bb = r0.boundingBox;
+      var box = null;
+      if(bb && vw && vh){
+        box = { x: bb.x / vw, y: bb.y / vh, w: bb.width / vw, h: bb.height / vh };
+      }
+      return {
+        text: r0.rawValue,
+        format: (r0.format || "").toUpperCase(),
+        box: box,
+        pass: -2                 // "the whole frame, natively"
+      };
+    }).catch(function(){ return null; });
+  };
+
   /* ---------- the loop ---------- */
 
   FastDecoder.prototype._schedule = function(){
@@ -875,7 +910,14 @@
       this.cursor = this.bestPass;
     }
 
-    this._sweep(performance.now(), 0).then(function(hit){
+    /* Native full-frame read first — one cheap call, no canvas, no pixel
+       copy. Only if it finds nothing does the windowed sweep run. */
+    var t0 = performance.now();
+    this._directRead().then(function(direct){
+      if(direct) return direct;
+      if(!self.running) return null;
+      return self._sweep(t0, 0);
+    }).then(function(hit){
       if(!self.running) return;
 
       if(hit && hit.text){

@@ -54,7 +54,14 @@
     <div class="laser"></div>
     <div class="flash" id="flash"></div>
     <div class="camBar" id="camBar" hidden>
-      <button id="btnTorch" aria-pressed="false"
+      <button id="btnLens" hidden title="Changer d'objectif — si l'image reste floue">
+        <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" fill="none"
+             stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="13" r="4"/><path d="M4 8h3l2-3h6l2 3h3v11H4z"/>
+        </svg>
+        <span>Objectif</span>
+      </button>
+      <button id="btnTorch" hidden aria-pressed="false"
               title="Lampe torche — stays on while scanning">
         <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
           <path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z" fill="currentColor"/>
